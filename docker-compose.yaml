@@ -1,0 +1,44 @@
+services:
+
+  postgres:
+    image: postgres:15
+    container_name: persuade-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: persuade
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  policy-engine:
+    build: ./policy-engine
+    container_name: policy-engine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/persuade
+    ports:
+      - "8001:8001"
+
+  api-gateway:
+    build: ./api-gateway
+    container_name: api-gateway
+    depends_on:
+      - policy-engine
+    environment:
+      POLICY_ENGINE_URL: http://policy-engine:8001
+      LLM_API_KEY: dummy_key
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
