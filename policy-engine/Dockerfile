@@ -1,4 +1,11 @@
 FROM python:3.11-slim
+    
+    # Install wget (needed for Antigravity server)
+RUN apt-get update && apt-get install -y \
+    wget \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
 
 WORKDIR /app
 
