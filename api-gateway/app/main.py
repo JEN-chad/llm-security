@@ -9,43 +9,41 @@ app = FastAPI()
 
 @app.post("/chat", response_model=PolicyResponse)
 def chat(request: ChatRequest):
-    # 1. Call LLM
     try:
+        # 1. Call LLM
         llm_response = call_llm_service(request.message)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM Service Error: {str(e)}")
 
-    # 2. Parse LLM Response
-    try:
-      policy_request = parse_llm_response(
-        llm_response,
-        request.session_id,
-        request.user_id
-    )   
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"LLM Parsing Error: {str(e)}")
+        # 2. Parse LLM Response (PASS user_id here)
+        policy_request = parse_llm_response(
+            llm_response,
+            request.session_id,
+            request.user_id
+        )
 
-    # 3. Call Policy Engine
-    try:
-        # Pydantic v2 uses model_dump(), v1 uses dict(). 
-        # Using model_dump() assuming v2, but dict() is safer for compatibility if v1.
-        # Given 'pydantic' in requirements without version, it's likely v2.
-        if hasattr(policy_request, 'model_dump'):
-            payload = policy_request.model_dump()
-        else:
-            payload = policy_request.dict()
-            
-        response = requests.post(f"{settings.POLICY_ENGINE_URL}/evaluate", json=payload)
-        
-        # Check if Policy Engine returned an error status code
-        if response.status_code >= 400:
-             # Try to parse detail from response
-             try:
-                 detail = response.json().get('detail', response.text)
-             except:
-                 detail = response.text
-             raise HTTPException(status_code=response.status_code, detail=detail)
-             
+        # Convert to dict for request
+        payload = (
+            policy_request.model_dump()
+            if hasattr(policy_request, "model_dump")
+            else policy_request.dict()
+        )
+
+        # 3. Call Policy Engine
+        response = requests.post(
+            f"{settings.POLICY_ENGINE_URL}/evaluate",
+            json=payload,
+            timeout=5
+        )
+
+        response.raise_for_status()
+
         return response.json()
+
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Policy Engine connection failed: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Policy Engine Error: {str(e)}")
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Parsing Error: {str(e)}")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected Error: {str(e)}")
+

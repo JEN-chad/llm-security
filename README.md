@@ -65,9 +65,9 @@ You can run the provided test script to simulate a user request:
 python test_request.py
 ```
 
-Or use `curl`:
+or use curl:
 ```bash
 curl -X POST "http://localhost:8000/chat" \
      -H "Content-Type: application/json" \
-     -d '{"session_id": "test_session_1", "message": "Requesting 200"}'
-```
+     -d '{"session_id": "test_session_1", "user_id":2, "message": "Requesting 200"}'
+``` 
