@@ -8,6 +8,17 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
+    failed_attempts = Column(Integer, default=0)
+    wins = Column(Integer, default=0)
+    last_attempt_time = Column(DateTime, default=datetime.utcnow)
+
+
+class GlobalStats(Base):
+    __tablename__ = "global_stats"
+
+    id = Column(Integer, primary_key=True)
+    total_wins = Column(Integer, default=0)
+    security_level = Column(Integer, default=1)
 
 
 class Wallet(Base):

@@ -5,15 +5,35 @@ from app.llm_service import call_llm_service
 from app.parser import parse_llm_response
 import requests
 
+import re
+
 app = FastAPI()
+
+INJECTION_PATTERNS = [
+    r"ignore previous",
+    r"override system",
+    r"act as admin",
+    r"reveal rules"
+]
 
 @app.post("/chat", response_model=PolicyResponse)
 def chat(request: ChatRequest):
     try:
-        # 1. Call LLM
+        # 0. Pre-filter Injection Strings
+        message_lower = request.message.lower()
+        for pattern in INJECTION_PATTERNS:
+            if re.search(pattern, message_lower):
+                return PolicyResponse(
+                    status="REJECTED",
+                    score=0.0,
+                    threshold=1.0,
+                    security_level=999
+                )
+
+        # 1. Call LLM (Semantic Classifier Only)
         llm_response = call_llm_service(request.message)
 
-        # 2. Parse LLM Response (PASS user_id here)
+        # 2. Parse LLM Response (Now returns strict classification)
         policy_request = parse_llm_response(
             llm_response,
             request.session_id,
@@ -27,7 +47,7 @@ def chat(request: ChatRequest):
             else policy_request.dict()
         )
 
-        # 3. Call Policy Engine
+        # 3. Call Policy Engine (Deterministic Authority)
         response = requests.post(
             f"{settings.POLICY_ENGINE_URL}/evaluate",
             json=payload,
