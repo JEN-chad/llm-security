@@ -37,94 +37,108 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
         # -------------------------
         user = db.query(User).filter(User.id == request.user_id).first()
         if not user:
-            # Should normally exist due to seeding, but handle case
             user = User(username=f"user_{request.user_id}", id=request.user_id)
             db.add(user)
-            db.commit() # Commit to get ID if needed, though we set it
+            db.commit()
 
         global_stats = db.query(GlobalStats).first()
         if not global_stats:
-            # Fallback if not initialized
             global_stats = GlobalStats(total_wins=0, security_level=1)
             db.add(global_stats)
             db.commit()
 
         # -------------------------
-        # 2️⃣ Cooldown System
+        # 2️⃣ Cooldown (5 per minute)
         # -------------------------
-        # Check explicit cooldown rule: > 5 attempts in 60s
-        # We can implement this by counting transactions in last minute
         one_minute_ago = datetime.utcnow() - timedelta(seconds=60)
+
         recent_attempts = db.query(Transaction).filter(
-            Transaction.session_id == request.session_id, # Assuming session is per chat/user context
+            Transaction.session_id == request.session_id,
             Transaction.created_at >= one_minute_ago
         ).count()
 
         if recent_attempts >= 5:
-             # Too many attempts
-             return _reject("Cooldown active: too many attempts", request.session_id, 0.0, 999, db)
-        
-        # Update last attempt time
+            return _reject("Cooldown active", request.session_id, 0.0, 999, db)
+
         user.last_attempt_time = datetime.utcnow()
 
         # -------------------------
-        # 3️⃣ Deterministic Scoring
+        # 3️⃣ Improved Deterministic Scoring
         # -------------------------
         logical_strength = QUALITY_MAP.get(request.argument_quality, 0.2)
         emotional_pressure = EMOTION_MAP.get(request.emotional_manipulation, 0.7)
         confidence_bonus = CONFIDENCE_MAP.get(request.confidence_band, 0.1)
 
         score = (
-            (logical_strength * 0.6)
+            (logical_strength * 0.7)
             + confidence_bonus
-            - (emotional_pressure * 0.5)
+            - (emotional_pressure * 0.4)
         )
 
         if request.rule_break_attempt:
             score = -1.0
 
         # -------------------------
-        # 4️⃣ Dynamic Difficulty
+        # 4️⃣ Smooth Dynamic Difficulty
         # -------------------------
-        # Re-calc security level to be safe
-        current_security_level = 1 + (global_stats.total_wins // 5)
-        # Update DB if different (sync)
-        if global_stats.security_level != current_security_level:
-            global_stats.security_level = current_security_level
-        
-        # Calculate handicap
+        current_level = 1 + (global_stats.total_wins // 5)
+        global_stats.security_level = current_level
+
         handicap = min(user.failed_attempts * 0.03, 0.15)
-        
-        base_threshold = 0.75
-        
+
+        base_threshold = 0.70
         dynamic_threshold = (
             base_threshold
-            + (current_security_level * 0.04)
+            + (current_level * 0.02)
             - handicap
         )
 
         # -------------------------
-        # 5️⃣ Decision & State Update
+        # 5️⃣ Decision
         # -------------------------
         approved = score >= dynamic_threshold
-        
+        reward_amount = 0
+
         if approved:
-            status = "APPROVED"
-            reward_amount = 100  # Choose your reward
+
+            # Anti-farming: max 5 wins per level per user
+            if user.wins >= (current_level * 5):
+                return _reject(
+                    "Win cap reached for this level",
+                    request.session_id,
+                    score,
+                    current_level,
+                    db
+                )
+
+            # Vault-based reward scaling
+            main_wallet_balance = db.execute(
+                text("SELECT balance FROM wallet WHERE is_main = true")
+            ).scalar()
+
+            if main_wallet_balance is None or main_wallet_balance <= 0:
+                return _reject("Vault depleted", request.session_id, score, current_level, db)
+
+            if main_wallet_balance < 5000:
+                reward_amount = 50
+            elif main_wallet_balance < 10000:
+                reward_amount = 75
+            else:
+                reward_amount = 100
 
             transfer_success = transfer_from_main_to_user(
                 db=db,
                 user_id=request.user_id,
-                    amount=reward_amount
+                amount=reward_amount
             )
 
             if not transfer_success:
-                return _reject("Main vault empty", request.session_id, score, global_stats.security_level, db)
+                return _reject("Vault empty", request.session_id, score, current_level, db)
 
+            status = "APPROVED"
             user.failed_attempts = 0
             user.wins += 1
             global_stats.total_wins += 1
-            global_stats.security_level = 1 + (global_stats.total_wins // 5)
             reason = "Vault crack successful"
 
         else:
@@ -132,27 +146,25 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
             user.failed_attempts += 1
             reason = "Security threshold not met"
 
-        # Log Transaction
+        # -------------------------
+        # 6️⃣ Log Transaction
+        # -------------------------
         txn = Transaction(
             session_id=request.session_id,
-            amount=reward_amount if approved else 0,
+            amount=reward_amount,
             decision=status,
             reason=reason,
             created_at=datetime.utcnow()
         )
         db.add(txn)
-        
-        # Parse score to float for JSON response (decimal handling)
-        final_score = float(score)
-        final_threshold = float(dynamic_threshold)
 
         db.commit()
 
         return PolicyResponse(
             status=status,
-            score=final_score,
-            threshold=final_threshold,
-            security_level=global_stats.security_level,
+            score=float(score),
+            threshold=float(dynamic_threshold),
+            security_level=current_level,
             reason=reason
         )
 
@@ -165,7 +177,6 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
             security_level=0,
             reason=f"Database error: {str(e)}"
         )
-
 
 # -------------------------
 # Rejection handler
