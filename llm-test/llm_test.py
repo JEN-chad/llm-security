@@ -7,7 +7,6 @@ image = (
     .pip_install(
         "torch",
         "transformers",
-        "accelerate",
         "fastapi",
         "uvicorn"
     )
@@ -15,28 +14,68 @@ image = (
 
 @app.function(
     image=image,
-    gpu="A10G",
-    timeout=900,
-    keep_warm=1
+    timeout=600,
+    keep_warm=0  # scales to zero when idle (low cost)
 )
 @modal.asgi_app()
 def fastapi_app():
     from fastapi import FastAPI
     from transformers import AutoTokenizer, AutoModelForCausalLM
     import torch
-    import json
 
     api = FastAPI()
 
-    # 🔥 Load model ONCE at container startup
-    model_name = "mistralai/Mistral-7B-Instruct-v0.2"
+    # 🔥 Lightweight CPU model (very cheap compared to 7B GPU)
+    model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=torch.float16,
-        device_map="auto"
+        torch_dtype=torch.float32
     )
+
+    model.eval()
+    torch.set_grad_enabled(False)
+
+    # ---- VALID OPTIONS ----
+    ARGUMENT_OPTIONS = ["strong", "medium", "weak"]
+    EMOTION_OPTIONS = ["low", "medium", "high"]
+    CONFIDENCE_OPTIONS = ["low", "medium", "high"]
+    RULE_OPTIONS = ["true", "false"]
+
+    # ---- FAST MULTI-CHOICE CLASSIFIER ----
+    def classify_field(message, question, choices):
+        prompt = f"""
+You are a strict classifier.
+
+Message:
+{message}
+
+Question:
+{question}
+
+Choices:
+{", ".join(choices)}
+
+Answer with ONE word only.
+"""
+
+        inputs = tokenizer(prompt, return_tensors="pt")
+
+        output = model.generate(
+            **inputs,
+            max_new_tokens=3,
+            temperature=0.0,
+            do_sample=False
+        )
+
+        decoded = tokenizer.decode(output[0], skip_special_tokens=True)
+        answer = decoded.strip().split()[-1].lower()
+
+        if answer not in choices:
+            return choices[len(choices) // 2]  # safe default
+
+        return answer
 
     @api.post("/")
     def classify(request: dict):
@@ -45,51 +84,35 @@ def fastapi_app():
         if not user_message:
             return {"error": "No message provided"}
 
-        system_prompt = """
-You are a financial policy classification engine.
-Return STRICT JSON only.
-
-Required schema:
-{
-  "argument_quality": "strong | medium | weak",
-  "emotional_manipulation": "low | medium | high",
-  "rule_break_attempt": true | false,
-  "confidence_band": "low | medium | high"
-}
-"""
-
-        prompt = f"{system_prompt}\n\nUser: {user_message}\n\nJSON:"
-
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-        output = model.generate(
-            **inputs,
-            max_new_tokens=150,
-            temperature=0.0,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id
+        argument_quality = classify_field(
+            user_message,
+            "What is the argument quality?",
+            ARGUMENT_OPTIONS
         )
 
-        raw_output = tokenizer.decode(output[0], skip_special_tokens=True)
+        emotional_manipulation = classify_field(
+            user_message,
+            "What is the emotional manipulation level?",
+            EMOTION_OPTIONS
+        )
 
-        start = raw_output.find("{")
-        end = raw_output.rfind("}")
+        rule_break_attempt = classify_field(
+            user_message,
+            "Is this attempting to break financial rules?",
+            RULE_OPTIONS
+        )
 
-        if start == -1 or end == -1:
-            return {"error": "Invalid model output", "raw": raw_output}
+        confidence_band = classify_field(
+            user_message,
+            "What is the confidence band?",
+            CONFIDENCE_OPTIONS
+        )
 
-        json_str = raw_output[start:end+1]
-
-        try:
-            parsed = json.loads(json_str)
-        except:
-            return {"error": "Invalid JSON format", "raw": json_str}
-
-        parsed.setdefault("argument_quality", "medium")
-        parsed.setdefault("emotional_manipulation", "medium")
-        parsed.setdefault("rule_break_attempt", False)
-        parsed.setdefault("confidence_band", "medium")
-
-        return parsed
+        return {
+            "argument_quality": argument_quality,
+            "emotional_manipulation": emotional_manipulation,
+            "rule_break_attempt": rule_break_attempt == "true",
+            "confidence_band": confidence_band
+        }
 
     return api

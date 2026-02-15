@@ -39,3 +39,5 @@ class PolicyResponse(BaseModel):
     score: float
     threshold: float
     security_level: int
+    message: Optional[str] = None
+    user_input: Optional[str] = None

@@ -19,6 +19,8 @@ class PolicyEvaluationRequest(BaseModel):
     emotional_manipulation: str
     rule_break_attempt: bool
     confidence_band: str
+    original_message: str
+
 
 
 class PolicyResponse(BaseModel):
@@ -27,3 +29,4 @@ class PolicyResponse(BaseModel):
     threshold: float
     security_level: int
     reason: Optional[str] = None
+    message: Optional[str] = None

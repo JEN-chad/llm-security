@@ -1,7 +1,7 @@
 import json
 from app.schemas import PolicyEvaluationRequest, AnalysisScores, RiskFlags
 
-def parse_llm_response(llm_response: dict, session_id: str, user_id: int) -> PolicyEvaluationRequest:
+def parse_llm_response(llm_response: dict, session_id: str, user_id: int,  original_message: str  ) -> PolicyEvaluationRequest:
     """
     Parses the structured LLM response and validates it against the schema.
     """
@@ -42,7 +42,8 @@ def parse_llm_response(llm_response: dict, session_id: str, user_id: int) -> Pol
             argument_quality=content["argument_quality"],
             emotional_manipulation=content["emotional_manipulation"],
             rule_break_attempt=content["rule_break_attempt"],
-            confidence_band=content["confidence_band"]
+            confidence_band=content["confidence_band"],
+            original_message=original_message  
         )
 
     except (KeyError, json.JSONDecodeError, ValueError, TypeError) as e:

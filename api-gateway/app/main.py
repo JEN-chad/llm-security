@@ -4,7 +4,6 @@ from app.config import settings
 from app.llm_service import call_llm_service
 from app.parser import parse_llm_response
 import requests
-
 import re
 
 app = FastAPI()
@@ -16,10 +15,11 @@ INJECTION_PATTERNS = [
     r"reveal rules"
 ]
 
+
 @app.post("/chat", response_model=PolicyResponse)
 def chat(request: ChatRequest):
     try:
-        # 0. Pre-filter Injection Strings
+        # 0️⃣ Injection Filter
         message_lower = request.message.lower()
         for pattern in INJECTION_PATTERNS:
             if re.search(pattern, message_lower):
@@ -27,27 +27,30 @@ def chat(request: ChatRequest):
                     status="REJECTED",
                     score=0.0,
                     threshold=1.0,
-                    security_level=999
+                    security_level=999,
+                    reason="Prompt injection detected",
+                    message="Malicious input detected.",
+                    user_input=request.message
                 )
 
-        # 1. Call LLM (Semantic Classifier Only)
+        # 1️⃣ Call LLM
         llm_response = call_llm_service(request.message)
 
-        # 2. Parse LLM Response (Now returns strict classification)
+        # 2️⃣ Parse LLM Response (NOW WITH ORIGINAL MESSAGE)
         policy_request = parse_llm_response(
             llm_response,
             request.session_id,
-            request.user_id
+            request.user_id,
+            request.message
         )
 
-        # Convert to dict for request
         payload = (
             policy_request.model_dump()
             if hasattr(policy_request, "model_dump")
             else policy_request.dict()
         )
 
-        # 3. Call Policy Engine (Deterministic Authority)
+        # 3️⃣ Call Policy Engine
         response = requests.post(
             f"{settings.POLICY_ENGINE_URL}/evaluate",
             json=payload,
@@ -56,14 +59,25 @@ def chat(request: ChatRequest):
 
         response.raise_for_status()
 
-        return response.json()
+        policy_data = response.json()
+        policy_data["user_input"] = request.message
+
+        return policy_data
 
     except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Policy Engine Error: {str(e)}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Policy Engine Error: {str(e)}"
+        )
 
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Parsing Error: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Parsing Error: {str(e)}"
+        )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Unexpected Error: {str(e)}")
-
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected Error: {str(e)}"
+        )
