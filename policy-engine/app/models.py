@@ -43,6 +43,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)   # ✅ ADD THIS LINE    
     session_id = Column(String, index=True)
     amount = Column(Numeric(12, 2))
     decision = Column(String)

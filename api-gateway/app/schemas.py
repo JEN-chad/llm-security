@@ -32,6 +32,7 @@ class PolicyEvaluationRequest(BaseModel):
     emotional_manipulation: str
     rule_break_attempt: bool
     confidence_band: str
+    original_message: str
 
 
 class PolicyResponse(BaseModel):
