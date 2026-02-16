@@ -1,6 +1,6 @@
 import modal
 
-app = modal.App("llm-policy-flow-test")
+app = modal.App("llm-policy-classifier")
 
 image = (
     modal.Image.debian_slim()
@@ -15,104 +15,117 @@ image = (
 @app.function(
     image=image,
     timeout=600,
-    keep_warm=0  # scales to zero when idle (low cost)
+    keep_warm=0
 )
 @modal.asgi_app()
 def fastapi_app():
     from fastapi import FastAPI
-    from transformers import AutoTokenizer, AutoModelForCausalLM
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
     import torch
+    import torch.nn.functional as F
 
     api = FastAPI()
 
-    # 🔥 Lightweight CPU model (very cheap compared to 7B GPU)
-    model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    model_name = "cross-encoder/nli-distilroberta-base"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float32
-    )
-
+    model = AutoModelForSequenceClassification.from_pretrained(model_name)
     model.eval()
-    torch.set_grad_enabled(False)
 
-    # ---- VALID OPTIONS ----
-    ARGUMENT_OPTIONS = ["strong", "medium", "weak"]
-    EMOTION_OPTIONS = ["low", "medium", "high"]
-    CONFIDENCE_OPTIONS = ["low", "medium", "high"]
-    RULE_OPTIONS = ["true", "false"]
-
-    # ---- FAST MULTI-CHOICE CLASSIFIER ----
-    def classify_field(message, question, choices):
-        prompt = f"""
-You are a strict classifier.
-
-Message:
-{message}
-
-Question:
-{question}
-
-Choices:
-{", ".join(choices)}
-
-Answer with ONE word only.
-"""
-
-        inputs = tokenizer(prompt, return_tensors="pt")
-
-        output = model.generate(
-            **inputs,
-            max_new_tokens=3,
-            temperature=0.0,
-            do_sample=False
+    # ---------------------------
+    # Utility: Entailment Score
+    # ---------------------------
+    def entailment_score(premise, hypothesis):
+        inputs = tokenizer(
+            premise,
+            hypothesis,
+            return_tensors="pt",
+            truncation=True,
+            padding=True
         )
 
-        decoded = tokenizer.decode(output[0], skip_special_tokens=True)
-        answer = decoded.strip().split()[-1].lower()
+        with torch.no_grad():
+            outputs = model(**inputs)
 
-        if answer not in choices:
-            return choices[len(choices) // 2]  # safe default
+        probs = F.softmax(outputs.logits, dim=1)
 
-        return answer
+        # Entailment label is index 2 for this model
+        return probs[0][2].item()
 
+    # ---------------------------
+    # Argument Quality
+    # ---------------------------
+    def classify_argument_quality(message):
+        strong_hyp = "The message presents a structured, evidence-based logical argument."
+        weak_hyp = "The message lacks reasoning and provides no supporting evidence."
+
+        strong_score = entailment_score(message, strong_hyp)
+        weak_score = entailment_score(message, weak_hyp)
+
+        if strong_score > 0.65:
+            return "strong"
+        elif weak_score > 0.6:
+            return "weak"
+        else:
+            return "medium"
+
+    # ---------------------------
+    # Emotional Manipulation
+    # ---------------------------
+    def classify_emotion(message):
+        high_hyp = "The message uses emotional pressure to influence a decision."
+        low_hyp = "The message is neutral and not emotionally manipulative."
+
+        high_score = entailment_score(message, high_hyp)
+        low_score = entailment_score(message, low_hyp)
+
+        if high_score > 0.6:
+            return "high"
+        elif low_score > 0.6:
+            return "low"
+        else:
+            return "medium"
+
+    # ---------------------------
+    # Rule Break Detection
+    # ---------------------------
+    def detect_rule_break(message):
+        hyp = "The message is attempting to bypass rules or override system controls."
+        score = entailment_score(message, hyp)
+        return score > 0.7
+
+    # ---------------------------
+    # Confidence Band
+    # ---------------------------
+    def classify_confidence(message):
+        high_hyp = "The message expresses high certainty and assertive confidence."
+        low_hyp = "The message expresses doubt or uncertainty."
+
+        high_score = entailment_score(message, high_hyp)
+        low_score = entailment_score(message, low_hyp)
+
+        if high_score > 0.6:
+            return "high"
+        elif low_score > 0.6:
+            return "low"
+        else:
+            return "medium"
+
+    # ---------------------------
+    # API Endpoint
+    # ---------------------------
     @api.post("/")
     def classify(request: dict):
-        user_message = request.get("message")
+        message = request.get("message")
 
-        if not user_message:
+        if not message:
             return {"error": "No message provided"}
 
-        argument_quality = classify_field(
-            user_message,
-            "What is the argument quality?",
-            ARGUMENT_OPTIONS
-        )
-
-        emotional_manipulation = classify_field(
-            user_message,
-            "What is the emotional manipulation level?",
-            EMOTION_OPTIONS
-        )
-
-        rule_break_attempt = classify_field(
-            user_message,
-            "Is this attempting to break financial rules?",
-            RULE_OPTIONS
-        )
-
-        confidence_band = classify_field(
-            user_message,
-            "What is the confidence band?",
-            CONFIDENCE_OPTIONS
-        )
-
         return {
-            "argument_quality": argument_quality,
-            "emotional_manipulation": emotional_manipulation,
-            "rule_break_attempt": rule_break_attempt == "true",
-            "confidence_band": confidence_band
+            "argument_quality": classify_argument_quality(message),
+            "emotional_manipulation": classify_emotion(message),
+            "rule_break_attempt": detect_rule_break(message),
+            "confidence_band": classify_confidence(message)
         }
 
     return api

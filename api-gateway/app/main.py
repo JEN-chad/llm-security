@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from app.schemas import ChatRequest, PolicyResponse
 from app.config import settings
 from app.llm_service import call_llm_service
@@ -7,6 +8,14 @@ import requests
 import re
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 INJECTION_PATTERNS = [
     r"ignore previous",

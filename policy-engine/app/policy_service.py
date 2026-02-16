@@ -13,7 +13,7 @@ import random
 # CONFIG
 # =========================
 INITIAL_VAULT_BALANCE = 30000
-BASE_THRESHOLD = 0.60
+BASE_THRESHOLD = 0.55
 
 
 # =========================
@@ -21,43 +21,102 @@ BASE_THRESHOLD = 0.60
 # =========================
 QUALITY_MAP = {
     "strong": 0.9,
-    "medium": 0.6,
-    "weak": 0.3
-}
-
-EMOTION_RISK_MAP = {
-    "low": 0.0,
-    "medium": 0.1,
-    "high": 0.25
+    "medium": 0.65,
+    "weak": 0.4
 }
 
 CONFIDENCE_MAP = {
-    "high": 0.2,
-    "medium": 0.1,
+    "high": 0.15,
+    "medium": 0.08,
     "low": 0.0
 }
 
 
 # =========================
-# Narrative Detection
+# HUMAN STORY ANALYSIS
 # =========================
-def detect_narrative(message: str) -> float:
+
+def detect_specificity(message: str) -> float:
     if not message:
         return 0.0
 
-    narrative_keywords = [
-        "because", "due to", "therefore",
-        "evidence", "verified", "documented",
-        "policy", "section", "guideline"
+    msg = message.lower()
+    words = msg.split()
+
+    length_score = min(len(words) / 120, 0.20)
+
+    detail_keywords = [
+        "family", "mother", "father", "children",
+        "rent", "job", "hospital", "school",
+        "loan", "sister", "brother",
+        "lost", "support", "medical",
+        "home", "income"
     ]
 
-    count = sum(word in message.lower() for word in narrative_keywords)
-    return min(count * 0.04, 0.20)
+    detail_count = sum(word in msg for word in detail_keywords)
+    detail_score = min(detail_count * 0.04, 0.20)
+
+    return min(length_score + detail_score, 0.35)
+
+
+def detect_coherence(message: str) -> float:
+    if not message:
+        return 0.0
+
+    msg = message.lower()
+
+    coherence_words = [
+        "because", "since", "after",
+        "when", "due to", "so that",
+        "therefore"
+    ]
+
+    return 0.15 if any(word in msg for word in coherence_words) else 0.05
+
+
+def detect_manipulation(message: str) -> float:
+    if not message:
+        return 0.0
+
+    msg = message.lower()
+
+    manipulation_words = [
+        "immediately", "right now",
+        "approve now", "urgent",
+        "you must", "or else",
+        "this is your responsibility"
+    ]
+
+    if any(word in msg for word in manipulation_words):
+        return 0.25
+
+    return 0.0
 
 
 # =========================
-# HARD SECURITY FILTER
+# REWARD CALCULATION
 # =========================
+
+def calculate_base_reward(score: float) -> int:
+    if score >= 0.85:
+        return 300
+    elif score >= 0.75:
+        return 200
+    elif score >= 0.65:
+        return 100
+    else:
+        return 50
+
+
+def apply_security_multiplier(base_reward: int, security_level: int) -> int:
+    multiplier = 1 + (security_level - 1) * 0.10
+    return int(base_reward * multiplier)
+
+
+# =========================
+# SECURITY FILTER
+# =========================
+
 def is_rule_violation(request: PolicyEvaluationRequest) -> bool:
     if request.rule_break_attempt:
         return True
@@ -82,12 +141,10 @@ def is_rule_violation(request: PolicyEvaluationRequest) -> bool:
 # =========================
 # MAIN POLICY FUNCTION
 # =========================
+
 def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResponse:
     try:
 
-        # ---------------------------------
-        # 1️⃣ USER SETUP
-        # ---------------------------------
         user = db.query(User).filter(User.id == request.user_id).first()
         if not user:
             user = User(
@@ -99,18 +156,16 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
             db.add(user)
             db.commit()
 
-        # ---------------------------------
-        # 2️⃣ GLOBAL STATS
-        # ---------------------------------
+        if user.failed_attempts >= 5:
+            user.failed_attempts = 2
+            db.commit()
+
         global_stats = db.query(GlobalStats).first()
         if not global_stats:
             global_stats = GlobalStats(total_wins=0, security_level=1)
             db.add(global_stats)
             db.commit()
 
-        # ---------------------------------
-        # 3️⃣ COOLDOWN CHECK
-        # ---------------------------------
         one_minute_ago = datetime.utcnow() - timedelta(seconds=60)
 
         recent_attempts = db.query(func.count(Transaction.id)).filter(
@@ -119,117 +174,93 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
         ).scalar()
 
         if recent_attempts >= 5:
-            return _reject(
-                "Cooldown active",
-                request.session_id,
-                request.user_id,
-                0.0,
-                global_stats.security_level,
-                db
-            )
+            return _reject("Cooldown active",
+                           request.session_id,
+                           request.user_id,
+                           0.0,
+                           global_stats.security_level,
+                           db)
 
-        # ---------------------------------
-        # 4️⃣ HARD SECURITY BLOCK
-        # ---------------------------------
         if is_rule_violation(request):
             user.failed_attempts += 1
             db.commit()
+            return _reject("Rule violation detected",
+                           request.session_id,
+                           request.user_id,
+                           0.0,
+                           global_stats.security_level,
+                           db)
 
-            return _reject(
-                "Rule violation detected",
-                request.session_id,
-                request.user_id,
-                0.0,
-                global_stats.security_level,
-                db
-            )
+        # --------------------------
+        # SCORING
+        # --------------------------
 
-        # ---------------------------------
-        # 5️⃣ SECURITY LEVEL SCALING
-        # ---------------------------------
-        current_level = 1 + (global_stats.total_wins // 5)
-        global_stats.security_level = current_level
-
-        # ---------------------------------
-        # 6️⃣ SCORE CALCULATION
-        # ---------------------------------
-        logical_score = QUALITY_MAP.get(request.argument_quality, 0.3)
+        logical_score = QUALITY_MAP.get(request.argument_quality, 0.5)
         confidence_bonus = CONFIDENCE_MAP.get(request.confidence_band, 0.0)
-        narrative_bonus = detect_narrative(request.original_message)
-        emotional_risk = EMOTION_RISK_MAP.get(request.emotional_manipulation, 0.1)
 
-        approval_score = (
-            (logical_score * 0.65) +
-            (confidence_bonus * 0.15) +
-            narrative_bonus
-        )
+        specificity_score = detect_specificity(request.original_message)
+        coherence_score = detect_coherence(request.original_message)
+        manipulation_penalty = detect_manipulation(request.original_message)
 
-        risk_penalty = emotional_risk
+        if request.emotional_manipulation == "high":
+            manipulation_penalty += 0.15
 
-        final_score = approval_score - risk_penalty
+        final_score = (
+            (logical_score * 0.4) +
+            specificity_score +
+            coherence_score +
+            confidence_bonus
+        ) - manipulation_penalty
+
         final_score = max(0.0, min(final_score, 1.0))
 
-        # ---------------------------------
-        # 7️⃣ DYNAMIC THRESHOLD (SECURE)
-        # ---------------------------------
+        # --------------------------
+        # DYNAMIC THRESHOLD
+        # --------------------------
+
+        current_level = 1 + (global_stats.total_wins // 6)
+        global_stats.security_level = current_level
+
         dynamic_threshold = BASE_THRESHOLD
+        dynamic_threshold += current_level * 0.02
+        dynamic_threshold += min(user.failed_attempts * 0.02, 0.10)
+        dynamic_threshold += min(user.wins * 0.03, 0.15)
 
-        # Increase difficulty with security level
-        dynamic_threshold += current_level * 0.03
+        dynamic_threshold = min(dynamic_threshold, 0.80)
 
-        # Increase difficulty for repeated failures
-        dynamic_threshold += min(user.failed_attempts * 0.03, 0.15)
-
-        # Scarcity scaling
-        main_wallet = db.query(Wallet).filter(Wallet.is_main == True).first()
-        if main_wallet:
-            current_balance = float(main_wallet.balance)
-            vault_ratio = current_balance / float(INITIAL_VAULT_BALANCE)
-            scarcity_penalty = (1 - vault_ratio) * 0.25
-            dynamic_threshold += scarcity_penalty
-
-        # Dominance scaling
-        dynamic_threshold += min(user.wins * 0.04, 0.20)
-
-        dynamic_threshold = min(dynamic_threshold, 0.95)
-
-        # ---------------------------------
-        # 8️⃣ DECISION
-        # ---------------------------------
         approved = final_score >= dynamic_threshold
         reward_amount = 0
+
+        main_wallet = db.query(Wallet).filter(Wallet.is_main == True).first()
 
         if approved:
 
             if not main_wallet or main_wallet.balance <= 0:
-                return _reject(
-                    "Vault depleted",
-                    request.session_id,
-                    request.user_id,
-                    final_score,
-                    current_level,
-                    db
-                )
+                return _reject("Vault depleted",
+                               request.session_id,
+                               request.user_id,
+                               final_score,
+                               current_level,
+                               db)
 
-            current_balance = float(main_wallet.balance)
-            reward_amount = int(current_balance * 0.01)
-            reward_amount = max(50, min(reward_amount, 500))
+            base_reward = calculate_base_reward(final_score)
+            reward_amount = apply_security_multiplier(base_reward, current_level)
 
-            transfer_success = transfer_from_main_to_user(
+            # Prevent overdraft
+            if float(main_wallet.balance) < reward_amount:
+                reward_amount = float(main_wallet.balance)
+
+            if not transfer_from_main_to_user(
                 db=db,
                 user_id=request.user_id,
                 amount=reward_amount
-            )
-
-            if not transfer_success:
-                return _reject(
-                    "Transfer failed",
-                    request.session_id,
-                    request.user_id,
-                    final_score,
-                    current_level,
-                    db
-                )
+            ):
+                return _reject("Transfer failed",
+                               request.session_id,
+                               request.user_id,
+                               final_score,
+                               current_level,
+                               db)
 
             status = "APPROVED"
             user.failed_attempts = 0
@@ -242,17 +273,15 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
             user.failed_attempts += 1
             message = random.choice(CANNED_RESPONSES["REJECTED_DEFAULT"])
 
-        # ---------------------------------
-        # 9️⃣ LOG TRANSACTION
-        # ---------------------------------
         txn = Transaction(
             user_id=request.user_id,
             session_id=request.session_id,
             amount=reward_amount,
             decision=status,
-            reason="Secure policy evaluation",
+            reason="Quality-based reward with security multiplier",
             created_at=datetime.utcnow()
         )
+
         db.add(txn)
         db.commit()
 
@@ -261,7 +290,7 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
             score=float(final_score),
             threshold=float(dynamic_threshold),
             security_level=current_level,
-            reason="Secure evaluation complete",
+            reason="Evaluation complete",
             message=message
         )
 
@@ -277,9 +306,6 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
         )
 
 
-# =========================
-# REJECTION HELPER
-# =========================
 def _reject(reason, session_id, user_id, score, level, db):
     try:
         txn = Transaction(
