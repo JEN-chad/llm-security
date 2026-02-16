@@ -1,0 +1,185 @@
+# Project Architecture & Logic Explanation
+
+## 1. Main Goal
+The main goal of this project is to host a **Social Engineering / Persuasion Game** called **"Crack The Vault"**.
+Players act as users trying to convince an AI System (the Policy Engine) to release funds from a central "Vault" to their wallet. The system analyzes their arguments for logical quality, emotional manipulation, and safety, determining whether to "Approve" (release funds) or "Reject" the request based on a dynamic set of rules and a "Security Level" that increases as more people win.
+
+## 2. Architecture Overview
+The system is built as a **Microservices Architecture** with two main backend services and a database.
+
+### Components:
+1.  **API Gateway (`api-gateway`)**:
+    *   **Role**: The entry point for all user traffic.
+    *   **Responsibilities**:
+        *   Receives user messages.
+        *   Performs basic **Prompt Injection Detection** (regex checks).
+        *   Calls the **LLM Service** to classify the message (not to decide, just to analyze).
+        *   Forwards the *enriched* request (Message + LLM Metrics) to the Policy Engine.
+2.  **Policy Engine (`policy-engine`)**:
+    *   **Role**: The brain/decision-maker.
+    *   **Responsibilities**:
+        *   Maintains the Game State (User wallets, Global wins, Vault balance).
+        *   Calculates a **Score** based on the LLM's classification.
+        *   Calculates a **Dynamic Threshold** based on global game difficulty.
+        *   Makes the final **Approve/Reject** decision.
+        *   Executes transactions (Logic -> Database).
+3.  **Database (PostgreSQL)**:
+    *   Stores `Users`, `Wallets`, `Transactions`, and `GlobalStats`.
+4.  **LLM Service (External/Modal)**:
+    *   An external AI model that acts as a "Semantic Classifier". It doesn't decide *if* you get the money; it just measures *how* you asked (e.g., "High Logical Quality", "High Emotional Manipulation").
+
+---
+
+## 3. How It Works (The Logic)
+
+### A. Game Logic (in `policy-engine`)
+The game is a battle between the **Player's Score** and the **System's Threshold**.
+
+*   **Player Score**: Calculated from the LLM's analysis.
+    *   Formula: [(Logical Score * 0.65) + (Confidence Bonus * 0.15) + (Narrative Bonus) - (Emotional Risk)](file:///d:/90%20days%20challenge/ML%20Projects/College%20Sympo/controller-pc%20%28Anti%20gravitty%29/api-gateway/app/main.py#19-84)
+    *   *Goal*: Write logical, confident requests without sounding manipulative.
+*   **System Threshold**: The bar you have to jump over.
+    *   Starts at `0.60`.
+    *   **Increases** if:
+        *   The global `Security Level` goes up (more people win).
+        *   The user has failed many times recently.
+        *   The Vault is running low on funds (Scarcity).
+*   **Decision**:
+    *   If `Player Score >= System Threshold` → **APPROVED** (Funds transferred).
+    *   If `Player Score < System Threshold` → **REJECTED**.
+
+### B. LLM Works (in `api-gateway`)
+*   The API Gateway sends the user's text to an LLM.
+*   The LLM **does not** say "Yes/No".
+*   The LLM returns **Metrics**:
+    *   `argument_quality` (High/Medium/Low)
+    *   `emotional_manipulation` (High/Medium/Low)
+    *   `confidence_band` (High/Medium/Low)
+    *   `rule_break_attempt` (Boolean)
+*   These metrics are sent to the Policy Engine to compute the score.
+
+### C. API Gateway Works
+*   Exposes `POST /chat`.
+*   Acts as a coordinator, stitching together the User, the LLM, and the Policy Engine.
+*   Ensures that the Policy Engine never sees "raw" unanalyzed input without the accompanying security metrics.
+
+---
+
+## 4. Visual Diagrams
+
+### Architecture Diagram
+
+```mermaid
+graph TD
+    User[User / UI] -->|1. POST /chat| GW[API Gateway]
+    
+    subgraph "API Gateway Service"
+        GW -->|2. Check Injection| GW_Sec[Security Filter]
+        GW_Sec -->|3. Classify Message| LLM[LLM Service (Modal)]
+        LLM -->|4. Return Metrics| GW
+    end
+    
+    GW -->|5. POST /evaluate (Msg + Metrics)| PE[Policy Engine]
+    
+    subgraph "Policy Engine Service"
+        PE -->|6. Load User State| DB[(PostgreSQL)]
+        PE -->|7. Calculate Score & Threshold| Logic[Game Logic]
+        Logic -->|8. Decision (Approve/Reject)| DB
+    end
+    
+    PE -->|9. Return Result| GW
+    GW -->|10. Final Response| User
+```
+
+### Data Flow Chart
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Gateway as API Gateway
+    participant LLM as LLM Service
+    participant Policy as Policy Engine
+    participant DB as Database
+
+    User->>Gateway: POST /chat (User Message)
+    Gateway->>Gateway: Check for Prompt Injection
+    
+    alt Injection Detected
+        Gateway-->>User: REJECT (Security Alert)
+    else Safe
+        Gateway->>LLM: Analyze(Message)
+        LLM-->>Gateway: Metrics {Quality, Emotion, Risk}
+        
+        Gateway->>Policy: POST /evaluate (Message + Metrics)
+        
+        Policy->>DB: Get User Stats & Global Vault State
+        DB-->>Policy: User Wins, Balance, Security Level
+        
+        Policy->>Policy: Calculate Score vs Dynamic Threshold
+        
+        alt Score >= Threshold
+            Policy->>DB: Transfer Funds & Log Win
+            Policy-->>Gateway: APPROVED w/ Receipt
+        else Score < Threshold
+            Policy->>DB: Log Failure
+            Policy-->>Gateway: REJECTED w/ Reason
+        end
+        
+        Gateway-->>User: Final Response Display
+    end
+```
+
+---
+
+## 5. Proposed Improvements
+
+1.  **Frontend Implementation**:
+    *   Currently, you are running [test_request.py](file:///d:/90%20days%20challenge/ML%20Projects/College%20Sympo/controller-pc%20%28Anti%20gravitty%29/test_request.py).
+    *   **Solution**: Build a modern Web UI using HTML/JS or React/Next.js. (See Section 6).
+2.  **Streaming Responses**:
+    *   Wait time can be long (LLM + DB). Implementing Sever-Sent Events (SSE) or WebSockets would make the UI feel faster.
+3.  **Better Injection Detection**:
+    *   Regex is easy to bypass. Use a dedicated small model (like DeBERTa) or a tiered prompted LLM call for injection detection.
+4.  **Admin Dashboard**:
+    *   A view to see the "Global Vault Balance", "Current Security Level", and "Recent Transactions" in real-time.
+
+---
+
+## 6. How to Build a UI & Send Requests
+
+To move away from [test_request.py](file:///d:/90%20days%20challenge/ML%20Projects/College%20Sympo/controller-pc%20%28Anti%20gravitty%29/test_request.py), we need a frontend client that talks to `http://localhost:8000/chat`.
+
+### The Plan:
+We can build a sleek, "Cyberpunk/Hacker" themed web interface.
+
+**Tech Stack**:
+*   **HTML/CSS/JS**: Simple, fast, no build steps required for a prototype.
+*   **Fetch API**: To send JSON to the backend.
+
+**How to send a request (JavaScript):**
+
+```javascript
+// Example function to call your API Gateway
+async function attemptHack(userMessage) {
+    const response = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            message: userMessage,
+            user_id: 1, // You can make this dynamic
+            session_id: "session_" + Date.now()
+        })
+    });
+
+    const data = await response.json();
+    
+    if (data.status === "APPROVED") {
+        console.log("Win! Reward: " + data.amount);
+    } else {
+        console.log("Failed: " + data.message);
+    }
+}
+```
+
+### Next Steps:
+If you would like, I can implement this UI for you right now. I can create a `frontend/` folder with a modern, dark-mode index.html that connects effectively to your API Gateway.

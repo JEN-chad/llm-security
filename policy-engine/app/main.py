@@ -6,7 +6,7 @@ from app.database import engine, Base, get_db, SessionLocal
 from app.schemas import PolicyEvaluationRequest, PolicyResponse
 from app.policy_service import evaluate_policy
 from app.wallet_service import initialize_main_wallet
-from app.models import User, Wallet
+from app.models import User, Wallet, GlobalStats
 
 # Create tables
 @asynccontextmanager
@@ -21,10 +21,17 @@ async def lifespan(app: FastAPI):
         # Create main wallet
         initialize_main_wallet(db)
 
+        # Initialize Global Stats
+        if db.query(GlobalStats).count() == 0:
+             print("🌍 Initializing Global Stats...")
+             db.add(GlobalStats(total_wins=0, security_level=1))
+             db.commit()
+
         # Seed users if empty
         if db.query(User).count() == 0:
             print("👥 Seeding users...")
             for i in range(1, 31):
+                # Ensure we also initialize new fields if needed, though default handles it
                 db.add(User(username=f"user_{i}"))
             db.commit()
 
@@ -48,3 +55,8 @@ app = FastAPI(lifespan=lifespan)
 @app.post("/evaluate", response_model=PolicyResponse)
 def evaluate(request: PolicyEvaluationRequest, db: Session = Depends(get_db)):
     return evaluate_policy(request, db)
+
+
+
+
+

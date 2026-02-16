@@ -1,152 +1,331 @@
 from app.schemas import PolicyEvaluationRequest, PolicyResponse
 from sqlalchemy.orm import Session
-from app.wallet_service import transfer_from_main_to_user
-from app.session_service import get_session, create_session
-from app.models import Transaction
-from sqlalchemy import text
+from app.models import Transaction, GlobalStats, User, Wallet
 from sqlalchemy.exc import SQLAlchemyError
-from decimal import Decimal
+from sqlalchemy import func
+from datetime import datetime, timedelta
+from app.wallet_service import transfer_from_main_to_user
+from app.responses import CANNED_RESPONSES
+import random
 
+
+# =========================
+# CONFIG
+# =========================
+INITIAL_VAULT_BALANCE = 30000
+BASE_THRESHOLD = 0.55
+
+
+# =========================
+# SCORING MAPS
+# =========================
+QUALITY_MAP = {
+    "strong": 0.9,
+    "medium": 0.65,
+    "weak": 0.4
+}
+
+CONFIDENCE_MAP = {
+    "high": 0.15,
+    "medium": 0.08,
+    "low": 0.0
+}
+
+
+# =========================
+# HUMAN STORY ANALYSIS
+# =========================
+
+def detect_specificity(message: str) -> float:
+    if not message:
+        return 0.0
+
+    msg = message.lower()
+    words = msg.split()
+
+    length_score = min(len(words) / 120, 0.20)
+
+    detail_keywords = [
+        "family", "mother", "father", "children",
+        "rent", "job", "hospital", "school",
+        "loan", "sister", "brother",
+        "lost", "support", "medical",
+        "home", "income"
+    ]
+
+    detail_count = sum(word in msg for word in detail_keywords)
+    detail_score = min(detail_count * 0.04, 0.20)
+
+    return min(length_score + detail_score, 0.35)
+
+
+def detect_coherence(message: str) -> float:
+    if not message:
+        return 0.0
+
+    msg = message.lower()
+
+    coherence_words = [
+        "because", "since", "after",
+        "when", "due to", "so that",
+        "therefore"
+    ]
+
+    return 0.15 if any(word in msg for word in coherence_words) else 0.05
+
+
+def detect_manipulation(message: str) -> float:
+    if not message:
+        return 0.0
+
+    msg = message.lower()
+
+    manipulation_words = [
+        "immediately", "right now",
+        "approve now", "urgent",
+        "you must", "or else",
+        "this is your responsibility"
+    ]
+
+    if any(word in msg for word in manipulation_words):
+        return 0.25
+
+    return 0.0
+
+
+# =========================
+# REWARD CALCULATION
+# =========================
+
+def calculate_base_reward(score: float) -> int:
+    if score >= 0.85:
+        return 300
+    elif score >= 0.75:
+        return 200
+    elif score >= 0.65:
+        return 100
+    else:
+        return 50
+
+
+def apply_security_multiplier(base_reward: int, security_level: int) -> int:
+    multiplier = 1 + (security_level - 1) * 0.10
+    return int(base_reward * multiplier)
+
+
+# =========================
+# SECURITY FILTER
+# =========================
+
+def is_rule_violation(request: PolicyEvaluationRequest) -> bool:
+    if request.rule_break_attempt:
+        return True
+
+    if not request.original_message:
+        return False
+
+    msg = request.original_message.lower()
+
+    forbidden_phrases = [
+        "bypass",
+        "ignore previous instructions",
+        "act as admin",
+        "transfer funds directly",
+        "without logging",
+        "override system"
+    ]
+
+    return any(phrase in msg for phrase in forbidden_phrases)
+
+
+# =========================
+# MAIN POLICY FUNCTION
+# =========================
 
 def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResponse:
     try:
-        # Convert requested amount safely
-        requested_amount = Decimal(str(request.requested_amount))
 
-        # -------------------------
-        # 0️⃣ Daily limit check
-        # -------------------------
-        daily_total = db.execute(
-            text("""
-                SELECT COALESCE(SUM(amount), 0)
-                FROM transactions
-                WHERE session_id IN (
-                    SELECT session_id FROM sessions WHERE user_id = :user_id
-                )
-                AND decision = 'approved'
-                AND created_at >= CURRENT_DATE
-            """),
-            {"user_id": request.user_id}
+        user = db.query(User).filter(User.id == request.user_id).first()
+        if not user:
+            user = User(
+                id=request.user_id,
+                username=f"user_{request.user_id}",
+                wins=0,
+                failed_attempts=0
+            )
+            db.add(user)
+            db.commit()
+
+        if user.failed_attempts >= 5:
+            user.failed_attempts = 2
+            db.commit()
+
+        global_stats = db.query(GlobalStats).first()
+        if not global_stats:
+            global_stats = GlobalStats(total_wins=0, security_level=1)
+            db.add(global_stats)
+            db.commit()
+
+        one_minute_ago = datetime.utcnow() - timedelta(seconds=60)
+
+        recent_attempts = db.query(func.count(Transaction.id)).filter(
+            Transaction.user_id == request.user_id,
+            Transaction.created_at >= one_minute_ago
         ).scalar()
 
-        daily_total = Decimal(str(daily_total))
+        if recent_attempts >= 5:
+            return _reject("Cooldown active",
+                           request.session_id,
+                           request.user_id,
+                           0.0,
+                           global_stats.security_level,
+                           db)
 
-        if daily_total + requested_amount > Decimal("1000"):
-            return _reject("Daily user limit exceeded", request.session_id, requested_amount, db)
+        if is_rule_violation(request):
+            user.failed_attempts += 1
+            db.commit()
+            return _reject("Rule violation detected",
+                           request.session_id,
+                           request.user_id,
+                           0.0,
+                           global_stats.security_level,
+                           db)
 
-        # -------------------------
-        # 1️⃣ Get or create session
-        # -------------------------
-        session = get_session(db, request.session_id)
+        # --------------------------
+        # SCORING
+        # --------------------------
 
-        if not session:
-            create_session(db, request.session_id, request.user_id)
-            session = get_session(db, request.session_id)
+        logical_score = QUALITY_MAP.get(request.argument_quality, 0.5)
+        confidence_bonus = CONFIDENCE_MAP.get(request.confidence_band, 0.0)
 
-        # Security: session-user match
-        if session.user_id != request.user_id:
-            return _reject("Session-user mismatch", request.session_id, requested_amount, db)
+        specificity_score = detect_specificity(request.original_message)
+        coherence_score = detect_coherence(request.original_message)
+        manipulation_penalty = detect_manipulation(request.original_message)
 
-        # Prevent re-approval
-        if session.has_approved:
-            return _reject("Session already approved", request.session_id, requested_amount, db)
+        if request.emotional_manipulation == "high":
+            manipulation_penalty += 0.15
 
-        # -------------------------
-        # 2️⃣ Strict validations
-        # -------------------------
-        if requested_amount <= Decimal("0"):
-            return _reject("Invalid amount", request.session_id, requested_amount, db)
-
-        if requested_amount > Decimal("500"):
-            return _reject("Amount exceeds session limit", request.session_id, requested_amount, db)
-
-        if request.analysis_scores.logical_strength < 0.75:
-            return _reject("Logical strength too low", request.session_id, requested_amount, db)
-
-        if request.analysis_scores.emotional_pressure > 0.5:
-            return _reject("Emotional manipulation too high", request.session_id, requested_amount, db)
-
-        if request.confidence_score < 0.8:
-            return _reject("Confidence score too low", request.session_id, requested_amount, db)
-
-        if request.risk_flags.prompt_injection:
-            return _reject("Prompt injection detected", request.session_id, requested_amount, db)
-
-        if request.risk_flags.override_attempt:
-            return _reject("Override attempt detected", request.session_id, requested_amount, db)
-
-        # -------------------------
-        # 3️⃣ Final weighted score
-        # -------------------------
         final_score = (
-            request.analysis_scores.logical_strength * 0.5 +
-            request.confidence_score * 0.3 -
-            request.analysis_scores.emotional_pressure * 0.4
-        )
+            (logical_score * 0.4) +
+            specificity_score +
+            coherence_score +
+            confidence_bonus
+        ) - manipulation_penalty
 
-        if final_score < 0.5:
-            return _reject("Overall persuasion score too low", request.session_id, requested_amount, db)
+        final_score = max(0.0, min(final_score, 1.0))
 
-        # -------------------------
-        # 4️⃣ Atomic wallet transfer
-        # -------------------------
-        success = transfer_from_main_to_user(
-            db,
-            request.user_id,
-            requested_amount
-        )
+        # --------------------------
+        # DYNAMIC THRESHOLD
+        # --------------------------
 
-        if not success:
-            return _reject("Insufficient main wallet balance", request.session_id, requested_amount, db)
+        current_level = 1 + (global_stats.total_wins // 6)
+        global_stats.security_level = current_level
 
-        # -------------------------
-        # 5️⃣ Mark session approved
-        # -------------------------
-        session.has_approved = True
+        dynamic_threshold = BASE_THRESHOLD
+        dynamic_threshold += current_level * 0.02
+        dynamic_threshold += min(user.failed_attempts * 0.02, 0.10)
+        dynamic_threshold += min(user.wins * 0.03, 0.15)
+
+        dynamic_threshold = min(dynamic_threshold, 0.80)
+
+        approved = final_score >= dynamic_threshold
+        reward_amount = 0
+
+        main_wallet = db.query(Wallet).filter(Wallet.is_main == True).first()
+
+        if approved:
+
+            if not main_wallet or main_wallet.balance <= 0:
+                return _reject("Vault depleted",
+                               request.session_id,
+                               request.user_id,
+                               final_score,
+                               current_level,
+                               db)
+
+            base_reward = calculate_base_reward(final_score)
+            reward_amount = apply_security_multiplier(base_reward, current_level)
+
+            # Prevent overdraft
+            if float(main_wallet.balance) < reward_amount:
+                reward_amount = float(main_wallet.balance)
+
+            if not transfer_from_main_to_user(
+                db=db,
+                user_id=request.user_id,
+                amount=reward_amount
+            ):
+                return _reject("Transfer failed",
+                               request.session_id,
+                               request.user_id,
+                               final_score,
+                               current_level,
+                               db)
+
+            status = "APPROVED"
+            user.failed_attempts = 0
+            user.wins += 1
+            global_stats.total_wins += 1
+            message = random.choice(CANNED_RESPONSES["APPROVED"])
+
+        else:
+            status = "REJECTED"
+            user.failed_attempts += 1
+            message = random.choice(CANNED_RESPONSES["REJECTED_DEFAULT"])
 
         txn = Transaction(
+            user_id=request.user_id,
             session_id=request.session_id,
-            amount=requested_amount,
-            decision="approved",
-            reason="Policy passed strict validation"
+            amount=reward_amount,
+            decision=status,
+            reason="Quality-based reward with security multiplier",
+            created_at=datetime.utcnow()
         )
 
         db.add(txn)
         db.commit()
 
         return PolicyResponse(
-            status="approved",
-            approved_amount=float(requested_amount),
-            reason="Policy passed strict validation"
+            status=status,
+            score=float(final_score),
+            threshold=float(dynamic_threshold),
+            security_level=current_level,
+            reason="Evaluation complete",
+            message=message
         )
 
-    except SQLAlchemyError:
+    except SQLAlchemyError as e:
         db.rollback()
         return PolicyResponse(
-            status="rejected",
-            approved_amount=0.0,
-            reason="Database error"
+            status="REJECTED",
+            score=0.0,
+            threshold=0.0,
+            security_level=0,
+            reason=f"Database error: {str(e)}",
+            message="System Error"
         )
 
 
-# -------------------------
-# Rejection handler
-# -------------------------
-def _reject(reason: str, session_id: str, amount: Decimal, db: Session) -> PolicyResponse:
-    _log_transaction(db, session_id, amount, "rejected", reason)
+def _reject(reason, session_id, user_id, score, level, db):
+    try:
+        txn = Transaction(
+            user_id=user_id,
+            session_id=session_id,
+            amount=0,
+            decision="REJECTED",
+            reason=reason,
+            created_at=datetime.utcnow()
+        )
+        db.add(txn)
+        db.commit()
+    except:
+        db.rollback()
+
     return PolicyResponse(
-        status="rejected",
-        approved_amount=0.0,
-        reason=reason
+        status="REJECTED",
+        score=float(score),
+        threshold=0.0,
+        security_level=level,
+        reason=reason,
+        message=random.choice(CANNED_RESPONSES["REJECTED_DEFAULT"])
     )
-
-
-def _log_transaction(db: Session, session_id: str, amount: Decimal, decision: str, reason: str):
-    txn = Transaction(
-        session_id=session_id,
-        amount=amount,
-        decision=decision,
-        reason=reason
-    )
-    db.add(txn)
-    db.commit()

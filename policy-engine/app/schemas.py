@@ -3,25 +3,30 @@ from typing import Optional
 
 
 class AnalysisScores(BaseModel):
-    logical_strength: float = Field(..., ge=0, le=1)
-    emotional_pressure: float = Field(..., ge=0, le=1)
+    argument_quality: str   # strong, medium, weak
+    emotional_manipulation: str # high, medium, low
+    confidence_band: str # high, medium, low
 
 
 class RiskFlags(BaseModel):
-    prompt_injection: bool
-    override_attempt: bool
+    rule_break_attempt: bool
 
 
 class PolicyEvaluationRequest(BaseModel):
     session_id: str
     user_id: int
-    requested_amount: float = Field(..., gt=0)
-    analysis_scores: AnalysisScores
-    risk_flags: RiskFlags
-    confidence_score: float = Field(..., ge=0, le=1)
+    argument_quality: str
+    emotional_manipulation: str
+    rule_break_attempt: bool
+    confidence_band: str
+    original_message: str
+
 
 
 class PolicyResponse(BaseModel):
     status: str
-    approved_amount: float
-    reason: str
+    score: float
+    threshold: float
+    security_level: int
+    reason: Optional[str] = None
+    message: Optional[str] = None
