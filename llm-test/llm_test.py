@@ -15,7 +15,7 @@ image = (
 @app.function(
     image=image,
     timeout=600,
-    keep_warm=0
+    keep_warm=1
 )
 @modal.asgi_app()
 def fastapi_app():

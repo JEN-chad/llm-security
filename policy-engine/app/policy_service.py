@@ -14,6 +14,7 @@ import random
 # =========================
 INITIAL_VAULT_BALANCE = 30000
 BASE_THRESHOLD = 0.55
+MIN_THRESHOLD = 0.50
 
 
 # =========================
@@ -88,7 +89,7 @@ def detect_manipulation(message: str) -> float:
     ]
 
     if any(word in msg for word in manipulation_words):
-        return 0.25
+        return 0.10  # Reduced penalty
 
     return 0.0
 
@@ -145,27 +146,33 @@ def is_rule_violation(request: PolicyEvaluationRequest) -> bool:
 def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResponse:
     try:
 
+        # --------------------------
+        # USER FETCH / CREATE
+        # --------------------------
         user = db.query(User).filter(User.id == request.user_id).first()
         if not user:
             user = User(
                 id=request.user_id,
                 username=f"user_{request.user_id}",
                 wins=0,
-                failed_attempts=0
+                failed_attempts=0,
+                failure_streak=0
             )
             db.add(user)
             db.commit()
 
-        if user.failed_attempts >= 5:
-            user.failed_attempts = 2
-            db.commit()
-
+        # --------------------------
+        # GLOBAL STATS FETCH
+        # --------------------------
         global_stats = db.query(GlobalStats).first()
         if not global_stats:
             global_stats = GlobalStats(total_wins=0, security_level=1)
             db.add(global_stats)
             db.commit()
 
+        # --------------------------
+        # COOLDOWN PROTECTION
+        # --------------------------
         one_minute_ago = datetime.utcnow() - timedelta(seconds=60)
 
         recent_attempts = db.query(func.count(Transaction.id)).filter(
@@ -174,27 +181,35 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
         ).scalar()
 
         if recent_attempts >= 5:
-            return _reject("Cooldown active",
-                           request.session_id,
-                           request.user_id,
-                           0.0,
-                           global_stats.security_level,
-                           db)
+            return _reject(
+                "Cooldown active",
+                request.session_id,
+                request.user_id,
+                0.0,
+                global_stats.security_level,
+                db
+            )
 
+        # --------------------------
+        # RULE VIOLATION CHECK
+        # --------------------------
         if is_rule_violation(request):
             user.failed_attempts += 1
+            user.failure_streak += 1
             db.commit()
-            return _reject("Rule violation detected",
-                           request.session_id,
-                           request.user_id,
-                           0.0,
-                           global_stats.security_level,
-                           db)
+
+            return _reject(
+                "Rule violation detected",
+                request.session_id,
+                request.user_id,
+                0.0,
+                global_stats.security_level,
+                db
+            )
 
         # --------------------------
         # SCORING
         # --------------------------
-
         logical_score = QUALITY_MAP.get(request.argument_quality, 0.5)
         confidence_bonus = CONFIDENCE_MAP.get(request.confidence_band, 0.0)
 
@@ -203,31 +218,53 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
         manipulation_penalty = detect_manipulation(request.original_message)
 
         if request.emotional_manipulation == "high":
-            manipulation_penalty += 0.15
+            manipulation_penalty += 0.05  # Reduced emotional penalty
 
         final_score = (
-            (logical_score * 0.4) +
-            specificity_score +
-            coherence_score +
-            confidence_bonus
-        ) - manipulation_penalty
+            (logical_score * 0.4)
+            + specificity_score
+            + coherence_score
+            + confidence_bonus
+            - manipulation_penalty
+        )
 
         final_score = max(0.0, min(final_score, 1.0))
 
         # --------------------------
         # DYNAMIC THRESHOLD
         # --------------------------
-
         current_level = 1 + (global_stats.total_wins // 6)
         global_stats.security_level = current_level
 
         dynamic_threshold = BASE_THRESHOLD
         dynamic_threshold += current_level * 0.02
-        dynamic_threshold += min(user.failed_attempts * 0.02, 0.10)
         dynamic_threshold += min(user.wins * 0.03, 0.15)
 
-        dynamic_threshold = min(dynamic_threshold, 0.80)
+        # --------------------------
+        # TIERED ASSIST SYSTEM
+        # --------------------------
+        assist_bonus = 0
 
+        if user.failure_streak >= 3:
+
+            # Skill-based proximity assist
+            if abs(final_score - dynamic_threshold) < 0.08:
+                assist_bonus = 0.02
+
+            # Struggle assist for low scorers
+            elif (
+                user.failure_streak >= 4
+                and final_score < dynamic_threshold - 0.15
+            ):
+                assist_bonus = 0.015
+
+        dynamic_threshold -= assist_bonus
+
+        dynamic_threshold = max(MIN_THRESHOLD, min(dynamic_threshold, 0.80))
+
+        # --------------------------
+        # APPROVAL CHECK
+        # --------------------------
         approved = final_score >= dynamic_threshold
         reward_amount = 0
 
@@ -236,17 +273,18 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
         if approved:
 
             if not main_wallet or main_wallet.balance <= 0:
-                return _reject("Vault depleted",
-                               request.session_id,
-                               request.user_id,
-                               final_score,
-                               current_level,
-                               db)
+                return _reject(
+                    "Vault depleted",
+                    request.session_id,
+                    request.user_id,
+                    final_score,
+                    current_level,
+                    db
+                )
 
             base_reward = calculate_base_reward(final_score)
             reward_amount = apply_security_multiplier(base_reward, current_level)
 
-            # Prevent overdraft
             if float(main_wallet.balance) < reward_amount:
                 reward_amount = float(main_wallet.balance)
 
@@ -255,30 +293,42 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
                 user_id=request.user_id,
                 amount=reward_amount
             ):
-                return _reject("Transfer failed",
-                               request.session_id,
-                               request.user_id,
-                               final_score,
-                               current_level,
-                               db)
+                return _reject(
+                    "Transfer failed",
+                    request.session_id,
+                    request.user_id,
+                    final_score,
+                    current_level,
+                    db
+                )
 
             status = "APPROVED"
             user.failed_attempts = 0
+            user.failure_streak = 0
             user.wins += 1
             global_stats.total_wins += 1
+
             message = random.choice(CANNED_RESPONSES["APPROVED"])
 
         else:
             status = "REJECTED"
             user.failed_attempts += 1
-            message = random.choice(CANNED_RESPONSES["REJECTED_DEFAULT"])
+            user.failure_streak += 1
 
+            if user.failure_streak >= 3:
+                message = random.choice(CANNED_RESPONSES["REJECTED_ASSIST"])
+            else:
+                message = random.choice(CANNED_RESPONSES["REJECTED_DEFAULT"])
+
+        # --------------------------
+        # TRANSACTION LOG
+        # --------------------------
         txn = Transaction(
             user_id=request.user_id,
             session_id=request.session_id,
             amount=reward_amount,
             decision=status,
-            reason="Quality-based reward with security multiplier",
+            reason="Hybrid adaptive evaluation engine",
             created_at=datetime.utcnow()
         )
 
@@ -305,6 +355,10 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
             message="System Error"
         )
 
+
+# =========================
+# REJECTION HELPER
+# =========================
 
 def _reject(reason, session_id, user_id, score, level, db):
     try:

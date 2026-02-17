@@ -36,5 +36,13 @@ CANNED_RESPONSES = {
         "Authorization failed.",
         "Request rejected.",
         "Security threshold not met."
-    ]
+    ],
+    "REJECTED_ASSIST": [
+    "Access denied. You're close — refine your reasoning structure and try again.",
+    "Authorization failed. Improve clarity and logical flow to meet threshold.",
+    "Request rejected. Strengthen your justification and remove emotional bias.",
+    "Security threshold narrowly missed. Recalibrate and resubmit.",
+    "Access denied. Enhance specificity and structured reasoning for approval."
+]
+
 }

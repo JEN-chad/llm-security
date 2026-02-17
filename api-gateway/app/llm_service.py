@@ -3,7 +3,7 @@ import json
 import os
 
 # Put your real Modal URL here
-MODAL_LLM_ENDPOINT = "https://jenishj436--llm-policy-flow-test-fastapi-app.modal.run"
+MODAL_LLM_ENDPOINT = "https://jenishj436--llm-policy-classifier-fastapi-app.modal.run"
 
 
 def call_llm_service(message: str):

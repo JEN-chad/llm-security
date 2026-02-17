@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Numeric
+from sqlalchemy.orm import relationship
 from app.database import Base
 from datetime import datetime
 
@@ -7,10 +8,17 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+
     failed_attempts = Column(Integer, default=0)
+    failure_streak = Column(Integer, default=0)  # ✅ NEW (for engagement logic)
     wins = Column(Integer, default=0)
+
     last_attempt_time = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships (optional but recommended)
+    wallets = relationship("Wallet", backref="user", cascade="all, delete")
+    transactions = relationship("Transaction", backref="user", cascade="all, delete")
 
 
 class GlobalStats(Base):
@@ -25,7 +33,9 @@ class Wallet(Base):
     __tablename__ = "wallet"
 
     id = Column(Integer, primary_key=True, index=True)
+
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
+
     balance = Column(Numeric(12, 2), default=0)
     is_main = Column(Boolean, default=False)
 
@@ -34,7 +44,9 @@ class Session(Base):
     __tablename__ = "sessions"
 
     session_id = Column(String, primary_key=True, index=True)
+
     user_id = Column(Integer, ForeignKey("users.id"), index=True)
+
     has_approved = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -43,9 +55,12 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, index=True)   # ✅ ADD THIS LINE    
+
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)  # ✅ Fixed FK
     session_id = Column(String, index=True)
-    amount = Column(Numeric(12, 2))
+
+    amount = Column(Numeric(12, 2), default=0)
     decision = Column(String)
     reason = Column(String)
+
     created_at = Column(DateTime, default=datetime.utcnow)
