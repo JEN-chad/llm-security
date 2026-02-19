@@ -63,7 +63,7 @@ def chat(request: ChatRequest):
         response = requests.post(
             f"{settings.POLICY_ENGINE_URL}/evaluate",
             json=payload,
-            timeout=5
+            timeout=30
         )
 
         response.raise_for_status()

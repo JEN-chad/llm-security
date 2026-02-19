@@ -34,7 +34,7 @@ This assistance would provide stability for my children.
 
 def send_request(message, user_id=None):
     if user_id is None:
-        user_id = random.randint(1, TOTAL_USERS)
+        user_id = 18
 
     payload = {
         "session_id": f"session_{random.randint(1000,9999)}",
