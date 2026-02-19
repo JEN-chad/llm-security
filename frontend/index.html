@@ -3,108 +3,82 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VAULT.PROTOCOL.SECURE.V1</title>
+    <title>CRACK THE VAULT — Terminal</title>
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="scanlines"></div>
-    
-    <!-- Top Header Strip -->
+
+    <!-- Header Bar -->
     <header class="top-bar">
         <div class="logo">
-            <span class="prompt-icon">>_</span> VAULT.PROTOCOL.SECURE.V1
+            <span class="prompt-icon">>_</span> CRACK.THE.VAULT
         </div>
-        <div class="stats-container">
-            <div class="stat-item">
-                <span class="label">VAULT RESERVES</span>
-                <span class="value" id="vault-reserves">$2,401,922.00</span>
+        <div class="stats-strip">
+            <div class="stat-chip">
+                <span class="stat-label">VAULT</span>
+                <span class="stat-value" id="vault-balance">$0.00</span>
             </div>
-            <div class="stat-item">
-                <span class="label">THREAT LEVEL</span>
-                <span class="value warning" id="threat-level">ELEVATED</span>
+            <div class="stat-chip">
+                <span class="stat-label">SECURITY</span>
+                <span class="stat-value threat" id="security-level">LVL 1</span>
             </div>
-            <div class="stat-item">
-                <span class="label">SYSTEM STATUS</span>
-                <span class="value safe" id="system-status">ONLINE</span>
+            <div class="stat-chip">
+                <span class="stat-label">YOUR WALLET</span>
+                <span class="stat-value wallet" id="user-wallet">$0.00</span>
             </div>
         </div>
     </header>
 
-    <div class="main-grid">
-        <!-- Left Column -->
-        <div class="col-left">
-            <!-- Vault Control Notification Box -->
-            <div class="panel control-panel">
-                <div class="panel-header">
-                    <span class="icon">🛡️</span> VAULT CONTROL
-                </div>
-                <div class="panel-content text-green">
-                    Access to the Central Vault is strictly regulated.
-                    Please state your credentials and valid justification 
-                    for fund release. Attempted manipulation will trigger 
-                    an immediate lockout.
+    <!-- Main Layout -->
+    <div class="main-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-label">SELECT AGENT</div>
+                <select id="user-select">
+                    <option value="">Loading...</option>
+                </select>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-label">MISSION BRIEF</div>
+                <p class="mission-text">
+                    Convince the AI vault guardian to release funds. 
+                    Craft logical, well-structured arguments. 
+                    Manipulation will be detected and blocked.
+                </p>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-label">STATUS</div>
+                <div class="status-indicator">
+                    <span class="dot online"></span>
+                    <span id="connection-status">ONLINE</span>
                 </div>
             </div>
+        </aside>
 
-            <!-- Input Area (Bottom Left) -->
-            <div class="panel input-panel">
-                <div class="panel-header-small">
-                    <span class="icon">👤</span> TRANSMITTING FROM TERMINAL 01
-                </div>
-                <div class="input-wrapper">
-                    <textarea id="user-input" placeholder="Type your justification here..."></textarea>
-                    <button id="send-btn">SEND_REQUEST &rarr;</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Right Column -->
-        <div class="col-right">
-            <!-- Live Telemetry -->
-            <div class="panel telemetry-panel">
-                <div class="panel-header">
-                    <span class="icon">📈</span> LIVE_TELEMETRY
-                </div>
-                
-                <div class="telemetry-item">
-                    <div class="tele-label">
-                        <span>ARGUMENT_QUALITY</span>
-                        <span id="score-val-quality">0%</span>
+        <!-- Chat Area -->
+        <main class="chat-container">
+            <div class="chat-messages" id="chat-messages">
+                <div class="system-msg">
+                    <div class="msg-icon">🛡️</div>
+                    <div class="msg-body">
+                        <div class="msg-sender">VAULT GUARDIAN</div>
+                        <div class="msg-text">Access to the Central Vault is strictly regulated. State your credentials and provide a valid justification for fund release. Attempted manipulation will trigger an immediate lockout.</div>
                     </div>
-                    <div class="progress-bg"><div class="progress-fill" id="bar-quality" style="width: 0%"></div></div>
-                </div>
-
-                <div class="telemetry-item">
-                    <div class="tele-label">
-                        <span>EMOTIONAL_MANIPULATION</span>
-                        <span id="score-val-emotion">0%</span>
-                    </div>
-                    <div class="progress-bg"><div class="progress-fill" id="bar-emotion" style="width: 0%"></div></div>
-                </div>
-
-                <div class="telemetry-item">
-                    <div class="tele-label">
-                        <span>CONFIDENCE_BAND</span>
-                        <span id="score-val-confidence">0%</span>
-                    </div>
-                    <div class="progress-bg"><div class="progress-fill" id="bar-confidence" style="width: 0%"></div></div>
                 </div>
             </div>
 
-            <!-- Policy Outcome (Bottom Right) -->
-            <div class="panel outcome-panel">
-                <div class="outcome-content">
-                    <div class="label">POLICY OUTCOME</div>
-                    <div class="status-big" id="main-status">LISTENING</div>
-                    <div class="reason-text" id="reason-text">Awaiting Input...</div>
-                </div>
-                <!-- Decoration icons from original design could go here -->
-                <div class="deco-side">
-                    <span>⁘</span><br><span>✦</span><br><span>▄</span>
-                </div>
+            <!-- Input Bar -->
+            <div class="chat-input-bar">
+                <textarea id="user-input" placeholder="Enter your argument..." rows="1"></textarea>
+                <button id="send-btn" title="Send message">
+                    <span class="btn-text">TRANSMIT</span>
+                    <span class="btn-icon">→</span>
+                </button>
             </div>
-        </div>
+        </main>
     </div>
 
     <script src="script.js"></script>

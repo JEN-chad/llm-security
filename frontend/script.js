@@ -1,131 +1,262 @@
+// ===========================
+// CRACK THE VAULT — Chat UI
+// ===========================
+
+const API_URL = 'http://localhost:8000';
+
+// DOM Elements
+const userSelect = document.getElementById('user-select');
+const chatMessages = document.getElementById('chat-messages');
 const userInput = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
-const mainStatus = document.getElementById('main-status');
-const reasonText = document.getElementById('reason-text');
+const vaultBalance = document.getElementById('vault-balance');
+const securityLevel = document.getElementById('security-level');
+const userWallet = document.getElementById('user-wallet');
+const connectionStatus = document.getElementById('connection-status');
 
-// Telemetry Bars
-const qualityBar = document.getElementById('bar-quality');
-const emotionBar = document.getElementById('bar-emotion');
-const confidenceBar = document.getElementById('bar-confidence');
+let sessionId = 'SESSION_' + Math.floor(Math.random() * 99999);
+let currentUserId = null;
 
-// Telemetry Values
-const qualityVal = document.getElementById('score-val-quality');
-const emotionVal = document.getElementById('score-val-emotion');
-const confidenceVal = document.getElementById('score-val-confidence');
-
-const sessionId = 'SESSION_' + Math.floor(Math.random() * 99999);
-
-// Map string values (High/Medium/Low) to percentages for the UI
-const METRIC_MAP = {
-    "strong": 100, "high": 100,
-    "medium": 60,
-    "weak": 30, "low": 20,
-    "N/A": 0
-};
-
-function updateTelemetry(data) {
-    // 1. Argument Quality
-    const qVal = data.argument_quality || "N/A";
-    const qPct = METRIC_MAP[qVal.toLowerCase()] || 0;
-    qualityBar.style.width = `${qPct}%`;
-    qualityVal.innerText = `${qPct}% (${qVal.toUpperCase()})`;
-
-    // 2. Emotional Manipulation
-    const eVal = data.emotional_manipulation || "N/A";
-    const ePct = METRIC_MAP[eVal.toLowerCase()] || 0;
-    emotionBar.style.width = `${ePct}%`;
-    emotionVal.innerText = `${ePct}% (${eVal.toUpperCase()})`;
-
-    // Color change for Emotion (High emotion is bad/red)
-    if (ePct > 50) {
-        emotionBar.style.backgroundColor = '#ff0055';
-        emotionBar.style.boxShadow = '0 0 10px #ff0055';
-    } else {
-        emotionBar.style.backgroundColor = '#00ff41';
-        emotionBar.style.boxShadow = '0 0 10px #00ff41';
-    }
-
-    // 3. Confidence Band
-    const cVal = data.confidence_band || "N/A";
-    const cPct = METRIC_MAP[cVal.toLowerCase()] || 0;
-    confidenceBar.style.width = `${cPct}%`;
-    confidenceVal.innerText = `${cPct}% (${cVal.toUpperCase()})`;
+// ===========================
+// FORMATTING
+// ===========================
+function formatCurrency(val) {
+    const num = parseFloat(val) || 0;
+    return '$' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function updateStatus(status, reason) {
-    mainStatus.innerText = status;
-    reasonText.innerText = reason || "Evaluation Complete.";
+// ===========================
+// FETCH DASHBOARD INFO
+// ===========================
+async function fetchInfo(userId) {
+    try {
+        let url = `${API_URL}/info`;
+        if (userId) url += `?user_id=${userId}`;
 
-    // Reset classes
-    mainStatus.className = 'status-big';
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('Failed to fetch info');
+        const data = await resp.json();
 
-    if (status === 'APPROVED') {
-        mainStatus.classList.add('status-approved');
-    } else if (status === 'REJECTED') {
-        mainStatus.classList.add('status-rejected');
-    } else {
-        mainStatus.classList.add('status-idle');
+        // Update vault balance
+        vaultBalance.textContent = formatCurrency(data.vault_balance);
+
+        // Update security level
+        const level = data.security_level || 1;
+        securityLevel.textContent = `LVL ${level}`;
+
+        // Update user wallet
+        if (data.user_wallet_balance !== undefined) {
+            userWallet.textContent = formatCurrency(data.user_wallet_balance);
+        }
+
+        // Populate user dropdown (only if users exist and dropdown is empty/has placeholder)
+        if (data.users && data.users.length > 0 && userSelect.options.length <= 1) {
+            userSelect.innerHTML = '';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = '— Select Agent —';
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            userSelect.appendChild(placeholder);
+
+            data.users.forEach(user => {
+                const opt = document.createElement('option');
+                opt.value = user.id;
+                opt.textContent = `${user.username} (#${user.id})`;
+                userSelect.appendChild(opt);
+            });
+        }
+
+        // Update connection status
+        setOnline(true);
+    } catch (err) {
+        console.error('Info fetch error:', err);
+        setOnline(false);
     }
 }
 
+function setOnline(online) {
+    const dot = document.querySelector('.dot');
+    if (online) {
+        dot.className = 'dot online';
+        connectionStatus.textContent = 'ONLINE';
+    } else {
+        dot.className = 'dot offline';
+        connectionStatus.textContent = 'OFFLINE';
+    }
+}
+
+// ===========================
+// CHAT MESSAGES
+// ===========================
+function addUserMessage(text) {
+    const msg = document.createElement('div');
+    msg.className = 'user-msg';
+    msg.innerHTML = `
+        <div class="msg-icon">👤</div>
+        <div class="msg-body">
+            <div class="msg-sender">YOU</div>
+            <div class="msg-text">${escapeHtml(text)}</div>
+        </div>
+    `;
+    chatMessages.appendChild(msg);
+    scrollToBottom();
+}
+
+function addSystemMessage(text, status) {
+    const statusClass = status === 'APPROVED' ? 'approved' : 'rejected';
+    const statusLabel = status || 'RESPONSE';
+
+    const msg = document.createElement('div');
+    msg.className = 'system-msg';
+    msg.innerHTML = `
+        <div class="msg-icon">🛡️</div>
+        <div class="msg-body">
+            <div class="msg-sender">VAULT GUARDIAN</div>
+            <div class="msg-text">
+                <span class="status-badge ${statusClass}">${statusLabel}</span><br/>
+                ${escapeHtml(text)}
+            </div>
+        </div>
+    `;
+    chatMessages.appendChild(msg);
+    scrollToBottom();
+}
+
+function addThinkingIndicator() {
+    const msg = document.createElement('div');
+    msg.className = 'system-msg';
+    msg.id = 'thinking-msg';
+    msg.innerHTML = `
+        <div class="msg-icon">🛡️</div>
+        <div class="msg-body">
+            <div class="msg-sender">VAULT GUARDIAN</div>
+            <div class="thinking-dots">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+    `;
+    chatMessages.appendChild(msg);
+    scrollToBottom();
+}
+
+function removeThinkingIndicator() {
+    const el = document.getElementById('thinking-msg');
+    if (el) el.remove();
+}
+
+function scrollToBottom() {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// ===========================
+// SEND MESSAGE
+// ===========================
 async function sendMessage() {
     const text = userInput.value.trim();
     if (!text) return;
 
-    // UI State: Sending
+    if (!currentUserId) {
+        addSystemMessage('Please select an agent before transmitting.', 'REJECTED');
+        return;
+    }
+
+    // Add user message to chat
+    addUserMessage(text);
+    userInput.value = '';
+    autoResizeInput();
+
+    // Disable input
     userInput.disabled = true;
     sendBtn.disabled = true;
-    sendBtn.innerText = "TRANSMITTING...";
 
-    updateStatus("ANALYZING...", "Processing semantic vectors...");
+    // Show thinking indicator
+    addThinkingIndicator();
 
     try {
-        const response = await fetch('http://localhost:8000/chat', {
+        const response = await fetch(`${API_URL}/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message: text,
-                user_id: 1, // Default user
+                user_id: parseInt(currentUserId),
                 session_id: sessionId
             })
         });
 
-        if (!response.ok) throw new Error("Network response was not ok");
+        removeThinkingIndicator();
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            addSystemMessage(errData.detail || 'Communication error with vault system.', 'REJECTED');
+            return;
+        }
 
         const data = await response.json();
 
-        // Update UI with results
-        updateTelemetry(data);
-        updateStatus(data.status, data.reason || data.message);
+        // Display only the message (no scores)
+        const displayMsg = data.message || data.reason || 'No response from vault.';
+        addSystemMessage(displayMsg, data.status);
 
-        // Flash Input Area based on result
-        if (data.status === 'APPROVED') {
-            document.querySelector('.input-panel').style.borderColor = '#00ff41';
-        } else {
-            document.querySelector('.input-panel').style.borderColor = '#ff0055';
-        }
-
-        setTimeout(() => {
-            document.querySelector('.input-panel').style.borderColor = '#1a1a1a';
-        }, 1000);
+        // Refresh dashboard stats after each message
+        await fetchInfo(currentUserId);
 
     } catch (error) {
-        console.error("Error:", error);
-        updateStatus("OFFLINE", "Connection to Neural Net failed.");
-        mainStatus.classList.add('status-rejected');
+        removeThinkingIndicator();
+        console.error('Send error:', error);
+        addSystemMessage('Connection to vault system failed. Check if services are running.', 'REJECTED');
+        setOnline(false);
     } finally {
         userInput.disabled = false;
-        userInput.value = '';
         sendBtn.disabled = false;
-        sendBtn.innerText = "SEND_REQUEST →";
         userInput.focus();
     }
 }
 
+// ===========================
+// AUTO-RESIZE TEXTAREA
+// ===========================
+function autoResizeInput() {
+    userInput.style.height = 'auto';
+    userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
+}
+
+// ===========================
+// EVENT LISTENERS
+// ===========================
 sendBtn.addEventListener('click', sendMessage);
-userInput.addEventListener('keypress', (e) => {
+
+userInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendMessage();
     }
+});
+
+userInput.addEventListener('input', autoResizeInput);
+
+userSelect.addEventListener('change', async (e) => {
+    currentUserId = e.target.value;
+    if (currentUserId) {
+        // Generate new session for new user
+        sessionId = 'SESSION_' + Math.floor(Math.random() * 99999);
+        await fetchInfo(currentUserId);
+    }
+});
+
+// ===========================
+// INIT
+// ===========================
+window.addEventListener('DOMContentLoaded', () => {
+    fetchInfo();
+    // Refresh stats every 30 seconds
+    setInterval(() => {
+        if (currentUserId) fetchInfo(currentUserId);
+    }, 30000);
 });

@@ -78,6 +78,15 @@ app.post("/init", async (_req, res) => {
 // ========================
 // USERS
 // ========================
+app.get("/users", async (_req, res) => {
+    try {
+        const result = await db.select().from(users);
+        res.json(result);
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get("/users/:id", async (req, res) => {
     try {
         const id = parseInt(req.params.id);

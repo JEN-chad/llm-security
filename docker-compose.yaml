@@ -33,6 +33,7 @@ services:
       - .env
     environment:
       POLICY_ENGINE_URL: http://policy-engine:8001
+      DB_SERVICE_URL: http://db-service:8002
       LLM_API_KEY: dummy_key
     ports:
       - "8000:8000"

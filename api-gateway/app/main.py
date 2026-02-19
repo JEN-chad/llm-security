@@ -25,6 +25,51 @@ INJECTION_PATTERNS = [
 ]
 
 
+@app.get("/info")
+def get_info(user_id: int = None):
+    """Aggregate dashboard info for the frontend."""
+    import os
+    db_service_url = os.environ.get("DB_SERVICE_URL", "http://db-service:8002")
+    result = {}
+
+    # Get vault (main wallet) balance
+    try:
+        resp = requests.get(f"{db_service_url}/wallet/main", timeout=5)
+        result["vault_balance"] = resp.json().get("balance", "0") if resp.status_code == 200 else "0"
+    except:
+        result["vault_balance"] = "0"
+
+    # Get global stats (security level)
+    try:
+        resp = requests.get(f"{db_service_url}/global-stats", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            result["security_level"] = data.get("securityLevel", 1)
+            result["total_wins"] = data.get("totalWins", 0)
+        else:
+            result["security_level"] = 1
+            result["total_wins"] = 0
+    except:
+        result["security_level"] = 1
+        result["total_wins"] = 0
+
+    # Get users list
+    try:
+        resp = requests.get(f"{db_service_url}/users", timeout=5)
+        result["users"] = resp.json() if resp.status_code == 200 else []
+    except:
+        result["users"] = []
+
+    # Get specific user wallet balance if user_id provided
+    if user_id is not None:
+        try:
+            resp = requests.get(f"{db_service_url}/wallet/user/{user_id}", timeout=5)
+            result["user_wallet_balance"] = resp.json().get("balance", "0") if resp.status_code == 200 else "0"
+        except:
+            result["user_wallet_balance"] = "0"
+
+    return result
+
 @app.post("/chat", response_model=PolicyResponse)
 def chat(request: ChatRequest):
     try:
