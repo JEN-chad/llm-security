@@ -1,51 +1,61 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Numeric
-from app.database import Base
+"""
+Data models — now plain Pydantic models for parsing db-service responses.
+No more SQLAlchemy — the actual schema lives in the Drizzle db-service.
+"""
+from pydantic import BaseModel
+from typing import Optional
 from datetime import datetime
 
 
-class User(Base):
-    __tablename__ = "users"
+class User(BaseModel):
+    id: int
+    username: str
+    failedAttempts: int = 0
+    wins: int = 0
+    lastAttemptTime: Optional[datetime] = None
 
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    failed_attempts = Column(Integer, default=0)
-    wins = Column(Integer, default=0)
-    last_attempt_time = Column(DateTime, default=datetime.utcnow)
-
-
-class GlobalStats(Base):
-    __tablename__ = "global_stats"
-
-    id = Column(Integer, primary_key=True)
-    total_wins = Column(Integer, default=0)
-    security_level = Column(Integer, default=1)
+    # Allow snake_case aliases from DB
+    class Config:
+        populate_by_name = True
 
 
-class Wallet(Base):
-    __tablename__ = "wallet"
+class GlobalStats(BaseModel):
+    id: int
+    totalWins: int = 0
+    securityLevel: int = 1
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=True)
-    balance = Column(Numeric(12, 2), default=0)
-    is_main = Column(Boolean, default=False)
-
-
-class Session(Base):
-    __tablename__ = "sessions"
-
-    session_id = Column(String, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), index=True)
-    has_approved = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    class Config:
+        populate_by_name = True
 
 
-class Transaction(Base):
-    __tablename__ = "transactions"
+class Wallet(BaseModel):
+    id: int
+    userId: Optional[int] = None
+    balance: str = "0"
+    isMain: bool = False
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, index=True)   # ✅ ADD THIS LINE    
-    session_id = Column(String, index=True)
-    amount = Column(Numeric(12, 2))
-    decision = Column(String)
-    reason = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    class Config:
+        populate_by_name = True
+
+
+class Session(BaseModel):
+    sessionId: str
+    userId: int
+    hasApproved: bool = False
+    createdAt: Optional[datetime] = None
+
+    class Config:
+        populate_by_name = True
+
+
+class Transaction(BaseModel):
+    id: Optional[int] = None
+    userId: int
+    sessionId: Optional[str] = None
+    amount: Optional[str] = None
+    decision: Optional[str] = None
+    reason: Optional[str] = None
+    createdAt: Optional[datetime] = None
+
+    class Config:
+        populate_by_name = True

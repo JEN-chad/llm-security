@@ -1,7 +1,7 @@
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    DATABASE_URL: str
+    DB_SERVICE_URL: str = "http://db-service:8002"
 
     class Config:
         env_file = ".env"

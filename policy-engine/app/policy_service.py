@@ -1,9 +1,5 @@
 from app.schemas import PolicyEvaluationRequest, PolicyResponse
-from sqlalchemy.orm import Session
-from app.models import Transaction, GlobalStats, User, Wallet
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import func
-from datetime import datetime, timedelta
+from app.database import DBClient
 from app.wallet_service import transfer_from_main_to_user
 from app.responses import CANNED_RESPONSES
 import random
@@ -142,53 +138,57 @@ def is_rule_violation(request: PolicyEvaluationRequest) -> bool:
 # MAIN POLICY FUNCTION
 # =========================
 
-def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResponse:
+def evaluate_policy(request: PolicyEvaluationRequest, db: DBClient) -> PolicyResponse:
     try:
 
-        user = db.query(User).filter(User.id == request.user_id).first()
-        if not user:
-            user = User(
-                id=request.user_id,
-                username=f"user_{request.user_id}",
-                wins=0,
-                failed_attempts=0
-            )
-            db.add(user)
-            db.commit()
+        # Get user from db-service
+        user_resp = db.get(f"/users/{request.user_id}")
+        if user_resp.status_code == 404:
+            # Create user
+            create_resp = db.post("/users", json={
+                "id": request.user_id,
+                "username": f"user_{request.user_id}",
+                "wins": 0,
+                "failedAttempts": 0
+            })
+            user = create_resp.json()
+        else:
+            user = user_resp.json()
 
-        if user.failed_attempts >= 5:
-            user.failed_attempts = 2
-            db.commit()
+        if user.get("failedAttempts", 0) >= 5:
+            db.patch(f"/users/{request.user_id}", json={"failedAttempts": 2})
+            user["failedAttempts"] = 2
 
-        global_stats = db.query(GlobalStats).first()
-        if not global_stats:
-            global_stats = GlobalStats(total_wins=0, security_level=1)
-            db.add(global_stats)
-            db.commit()
+        # Get global stats
+        stats_resp = db.get("/global-stats")
+        if stats_resp.status_code == 404:
+            db.post("/init")
+            stats_resp = db.get("/global-stats")
+        global_stats = stats_resp.json()
 
-        one_minute_ago = datetime.utcnow() - timedelta(seconds=60)
-
-        recent_attempts = db.query(func.count(Transaction.id)).filter(
-            Transaction.user_id == request.user_id,
-            Transaction.created_at >= one_minute_ago
-        ).scalar()
+        # Check cooldown — count recent transactions
+        recent_resp = db.get("/transactions/count-recent", params={
+            "userId": request.user_id,
+            "seconds": 60
+        })
+        recent_attempts = recent_resp.json().get("count", 0)
 
         if recent_attempts >= 5:
             return _reject("Cooldown active",
                            request.session_id,
                            request.user_id,
                            0.0,
-                           global_stats.security_level,
+                           global_stats.get("securityLevel", 1),
                            db)
 
         if is_rule_violation(request):
-            user.failed_attempts += 1
-            db.commit()
+            failed = user.get("failedAttempts", 0) + 1
+            db.patch(f"/users/{request.user_id}", json={"failedAttempts": failed})
             return _reject("Rule violation detected",
                            request.session_id,
                            request.user_id,
                            0.0,
-                           global_stats.security_level,
+                           global_stats.get("securityLevel", 1),
                            db)
 
         # --------------------------
@@ -218,24 +218,32 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
         # DYNAMIC THRESHOLD
         # --------------------------
 
-        current_level = 1 + (global_stats.total_wins // 6)
-        global_stats.security_level = current_level
+        total_wins = global_stats.get("totalWins", 0)
+        current_level = 1 + (total_wins // 6)
+
+        # Update security level
+        db.patch("/global-stats", json={"securityLevel": current_level})
+
+        user_failed = user.get("failedAttempts", 0)
+        user_wins = user.get("wins", 0)
 
         dynamic_threshold = BASE_THRESHOLD
         dynamic_threshold += current_level * 0.02
-        dynamic_threshold += min(user.failed_attempts * 0.02, 0.10)
-        dynamic_threshold += min(user.wins * 0.03, 0.15)
+        dynamic_threshold += min(user_failed * 0.02, 0.10)
+        dynamic_threshold += min(user_wins * 0.03, 0.15)
 
         dynamic_threshold = min(dynamic_threshold, 0.80)
 
         approved = final_score >= dynamic_threshold
         reward_amount = 0
 
-        main_wallet = db.query(Wallet).filter(Wallet.is_main == True).first()
+        # Get main wallet
+        main_wallet_resp = db.get("/wallet/main")
+        main_wallet = main_wallet_resp.json() if main_wallet_resp.status_code == 200 else None
 
         if approved:
 
-            if not main_wallet or main_wallet.balance <= 0:
+            if not main_wallet or float(main_wallet.get("balance", 0)) <= 0:
                 return _reject("Vault depleted",
                                request.session_id,
                                request.user_id,
@@ -247,8 +255,9 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
             reward_amount = apply_security_multiplier(base_reward, current_level)
 
             # Prevent overdraft
-            if float(main_wallet.balance) < reward_amount:
-                reward_amount = float(main_wallet.balance)
+            main_balance = float(main_wallet.get("balance", 0))
+            if main_balance < reward_amount:
+                reward_amount = main_balance
 
             if not transfer_from_main_to_user(
                 db=db,
@@ -263,27 +272,32 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
                                db)
 
             status = "APPROVED"
-            user.failed_attempts = 0
-            user.wins += 1
-            global_stats.total_wins += 1
+            # Update user: reset failed_attempts, increment wins
+            db.patch(f"/users/{request.user_id}", json={
+                "failedAttempts": 0,
+                "wins": user_wins + 1
+            })
+            # Update global stats
+            db.patch("/global-stats", json={
+                "totalWins": total_wins + 1
+            })
             message = random.choice(CANNED_RESPONSES["APPROVED"])
 
         else:
             status = "REJECTED"
-            user.failed_attempts += 1
+            db.patch(f"/users/{request.user_id}", json={
+                "failedAttempts": user_failed + 1
+            })
             message = random.choice(CANNED_RESPONSES["REJECTED_DEFAULT"])
 
-        txn = Transaction(
-            user_id=request.user_id,
-            session_id=request.session_id,
-            amount=reward_amount,
-            decision=status,
-            reason="Quality-based reward with security multiplier",
-            created_at=datetime.utcnow()
-        )
-
-        db.add(txn)
-        db.commit()
+        # Record transaction
+        db.post("/transactions", json={
+            "userId": request.user_id,
+            "sessionId": request.session_id,
+            "amount": reward_amount,
+            "decision": status,
+            "reason": "Quality-based reward with security multiplier"
+        })
 
         return PolicyResponse(
             status=status,
@@ -294,8 +308,7 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
             message=message
         )
 
-    except SQLAlchemyError as e:
-        db.rollback()
+    except Exception as e:
         return PolicyResponse(
             status="REJECTED",
             score=0.0,
@@ -306,20 +319,17 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: Session) -> PolicyResp
         )
 
 
-def _reject(reason, session_id, user_id, score, level, db):
+def _reject(reason, session_id, user_id, score, level, db: DBClient):
     try:
-        txn = Transaction(
-            user_id=user_id,
-            session_id=session_id,
-            amount=0,
-            decision="REJECTED",
-            reason=reason,
-            created_at=datetime.utcnow()
-        )
-        db.add(txn)
-        db.commit()
+        db.post("/transactions", json={
+            "userId": user_id,
+            "sessionId": session_id,
+            "amount": 0,
+            "decision": "REJECTED",
+            "reason": reason
+        })
     except:
-        db.rollback()
+        pass
 
     return PolicyResponse(
         status="REJECTED",
