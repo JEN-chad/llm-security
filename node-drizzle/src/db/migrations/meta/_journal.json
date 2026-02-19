@@ -1,0 +1,13 @@
+{
+  "version": "5",
+  "dialect": "pg",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1771427928234,
+      "tag": "0000_narrow_dazzler",
+      "breakpoints": true
+    }
+  ]
+}

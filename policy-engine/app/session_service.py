@@ -1,33 +1,17 @@
-from sqlalchemy.orm import Session
-from app.models import Session as SessionModel
+from app.api_client import api_client
 
+async def get_session(session_id: str):
+    return await api_client.get_session(session_id)
 
-def get_session(db: Session, session_id: str):
-    return db.query(SessionModel).filter(
-        SessionModel.session_id == session_id
-    ).first()
+async def create_session(session_id: str, user_id: int):
+    return await api_client.create_session(session_id, user_id)
 
-
-def create_session(db: Session, session_id: str, user_id: int):
-    session = SessionModel(   # 🔥 USE MODEL CLASS
-        session_id=session_id,
-        user_id=user_id,
-        has_approved=False
-    )
-    db.add(session)
-    db.commit()
-    return session
-
-
-def is_session_approved(db: Session, session_id: str) -> bool:
-    session = get_session(db, session_id)
+async def is_session_approved(session_id: str) -> bool:
+    session = await get_session(session_id)
     if not session:
         return False
-    return session.has_approved
+    # Node service returns 'hasApproved' (camelCase)
+    return session.get("hasApproved", False)
 
-
-def mark_session_approved(db: Session, session_id: str):
-    session = get_session(db, session_id)
-    if session:
-        session.has_approved = True
-        db.commit()
+async def mark_session_approved(session_id: str):
+    await api_client.approve_session(session_id)

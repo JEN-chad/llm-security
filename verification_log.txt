@@ -1,0 +1,21 @@
+Script started...
+Waiting for services to settle...
+Testing Policy Engine at http://localhost:8001/evaluate...
+Status Code: 200
+Response: {
+  "status": "REJECTED",
+  "score": 0.0,
+  "threshold": 0.0,
+  "security_level": 0,
+  "reason": "Missing role",
+  "message": "Access denied."
+}
+⚠️ Policy Engine REJECTED the request (check logic/score).
+
+Checking User Persistence at http://localhost:3000/internal/users/123...
+Status Code: 404
+❌ User data not found.
+
+Checking Transactions at http://localhost:3000/internal/transactions/recent-count?userId=123...
+Recent Transactions: {'count': 0}
+✅ Transaction persistence confirmed.
