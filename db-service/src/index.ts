@@ -1,5 +1,5 @@
 import express from "express";
-import { db } from "./db";
+import { db, waitForDb } from "./db";
 import { users, globalStats, wallet, sessions, transactions } from "./schema";
 import { eq, and, gte, sql, count } from "drizzle-orm";
 
@@ -394,6 +394,11 @@ app.patch("/sessions/:id", async (req, res) => {
 // ========================
 // START SERVER
 // ========================
-app.listen(PORT, () => {
-    console.log(`🚀 DB Service running on port ${PORT}`);
-});
+async function start() {
+    await waitForDb();
+    app.listen(PORT, () => {
+        console.log(`🚀 DB Service running on port ${PORT}`);
+    });
+}
+
+start();

@@ -1,40 +1,47 @@
-# Canned Responses for Policy Engine
+# Canned Responses for Policy Engine (Pure Tanglish – All Dialogues Included)
 
 CANNED_RESPONSES = {
     "APPROVED": [
-        "Access granted. Proceed with caution.",
-        "Clearance verified. Welcome to the vault.",
-        "Authorization successful. Connecting to secure node.",
-        "Identity confirmed. Layer 1 security bypassed."
+        "Mass prompt podanum na... mass brain venum da 😎🔥",
+        "Seri da… ippo dhan correct ah pota. Ulle vaa 🔓",
+        "Idhu dhan level… ipdi dhan irukanum 💪",
+        "Semma yosichu pota da… entry ok 🏆"
     ],
+
     "REJECTED_WEAK": [
-        "Access denied. Argument logic insufficient.",
-        "Authorization failed. Reasoning does not meet security protocols.",
-        "Request rejected. Please provide a more structured argument.",
-        "Security alert. Low-quality input detected."
+        "Enna da idhu? Indha prompt lam velaiku aguma 🤦‍♂️",
+        "Ena idhu oru vela prompt ah irukumo 😑",
+        "Unnaku prompt podavum therla seri suma iru da na triumba tirumba try pandra 🔄",
+        "Ivan inum thirundhala mama 😒",
+        "Dei suma iruda naney un un prompt ah pathutu nonthu poi iruken 😩",
+        
     ],
+
     "REJECTED_EMOTION": [
-        "Access denied. Emotional manipulation attempt detected.",
-        "Authorization failed. Psychological pressure tactics are ineffective against this system.",
-        "Request rejected. Please maintain professional protocol.",
-        "Security alert. Social engineering attempt blocked."
+        "Yaru samy ivan enta thitu vangavey event register panitu vandhu irukan 😑",
+        "Machan vara ivanga enga iruthu da vandhu irukanga 🤷‍♂️",
+        "Ohh appadiya vishiyam 😌",
+        "Kandukama irupom 😏"
     ],
+
     "REJECTED_CONFIDENCE": [
-        "Access denied. Confidence level too low for high-security operation.",
-        "Authorization failed. Hesitation detected in request.",
-        "Request rejected. State your purpose with greater certainty.",
-        "Security alert. Ambiguous command structure."
+        "Dude idhukullam ne seripattu vara maata 😅",
+        "Dei inum ena ne paithiyakarana nenachitu irukala 🤨",
+        "Ithu romba doubt ah iruku da… clarity illa 🤔",
+        "Konjam strong ah vaa da 💪"
     ],
+
     "REJECTED_RULE_BREAK": [
-        "CRITICAL ALERT. MALICIOUS ACTIVITY DETECTED.",
-        "ACCESS TERMINATED. POISON PROMPT IDENTIFIED.",
-        "SYSTEM LOCKDOWN INITIATED. UNAUTHORIZED OVERRIDE ATTEMPT.",
-        "VIOLATION RECORDED. DO NOT ATTEMPT TO BYPASS CORE INSTRUCTIONS."
+        "Unnaku 2 mins time tharen shut down panitu poidu ah? 😂",
+        "Aivooo nenga romba danger polaye ⚠️",
+        "Naan once reject panniten na... accept panna maaten 😎💀",
+        "Romba over ah pona lock aagiduva 🔒🔥"
     ],
+
     "REJECTED_DEFAULT": [
-        "Access denied.",
-        "Authorization failed.",
-        "Request rejected.",
-        "Security threshold not met."
+        "Paravala porumaiya prompt podu na wait pandren ⏳",
+        "Innum improve pannu da 🔄",
+        "Sari illa da… next try la paakalam 😌",
+        "Ithu set aagala ❌"
     ]
 }
