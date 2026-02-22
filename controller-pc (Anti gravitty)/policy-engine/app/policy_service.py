@@ -1,6 +1,6 @@
 from app.schemas import PolicyEvaluationRequest, PolicyResponse
 from app.database import DBClient
-from app.wallet_service import transfer_from_main_to_user
+from app.wallet_service import execute_heist_transfer
 from app.responses import CANNED_RESPONSES
 import random
 
@@ -144,10 +144,9 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: DBClient) -> PolicyRes
         # Get user from db-service
         user_resp = db.get(f"/users/{request.user_id}")
         if user_resp.status_code == 404:
-            # Create user
+            # Create user using the string user_id directly as username
             create_resp = db.post("/users", json={
-                "id": request.user_id,
-                "username": f"user_{request.user_id}",
+                "username": request.user_id,
                 "wins": 0,
                 "failedAttempts": 0
             })
@@ -259,11 +258,21 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: DBClient) -> PolicyRes
             if main_balance < reward_amount:
                 reward_amount = main_balance
 
-            if not transfer_from_main_to_user(
+            # ── ATOMIC HEIST TRANSFER ─────────────────────────────────────────
+            # All steps (lock → deduct → credit → re-fetch → heist_history →
+            # bank_balance → commit) run inside ONE PostgreSQL transaction.
+            # If this returns False, ALL changes were rolled back automatically.
+            # DO NOT compute or record any balance value here — it comes from
+            # the committed db-service response.
+            transfer_result = execute_heist_transfer(
                 db=db,
                 user_id=request.user_id,
-                amount=reward_amount
-            ):
+                amount=reward_amount,
+                session_id=request.session_id,
+                user_message=request.original_message or "",
+            )
+
+            if not transfer_result:
                 return _reject("Transfer failed",
                                request.session_id,
                                request.user_id,
@@ -282,15 +291,20 @@ def evaluate_policy(request: PolicyEvaluationRequest, db: DBClient) -> PolicyRes
                 "totalWins": total_wins + 1
             })
             message = random.choice(CANNED_RESPONSES["APPROVED"])
+            # NOTE: heist_history and bank_balance were already updated atomically
+            # inside execute_heist_transfer — do NOT write them again here.
 
         else:
             status = "REJECTED"
+            reward_amount = 0
             db.patch(f"/users/{request.user_id}", json={
                 "failedAttempts": user_failed + 1
             })
             message = random.choice(CANNED_RESPONSES["REJECTED_DEFAULT"])
 
-        # Record transaction
+        # Record transaction for ALL decisions.
+        # For APPROVED heists, this is the lightweight audit-trail record only;
+        # the heist_history record was already committed atomically above.
         db.post("/transactions", json={
             "userId": request.user_id,
             "sessionId": request.session_id,

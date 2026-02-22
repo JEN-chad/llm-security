@@ -4,7 +4,7 @@ from typing import Optional
 
 class ChatRequest(BaseModel):
     session_id: str
-    user_id: int
+    user_id: str
     message: str
 
 
@@ -20,7 +20,7 @@ class RiskFlags(BaseModel):
 
 class PolicyEvaluationRequest(BaseModel):
     session_id: str
-    user_id: int
+    user_id: str
     # requested_amount is removed as it's not part of the game logic explicitly mentioned, 
     # but the game might need an "objective" or we can treat the message as the attempt.
     # The prompt didn't say to remove requested_amount, but the game is "Crack The Vault".

@@ -1,1 +1,0 @@
-ALTER TABLE "messages" ADD COLUMN "money_awarded" numeric(10, 2) DEFAULT '0';

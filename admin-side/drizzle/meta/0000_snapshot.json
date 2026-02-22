@@ -1,5 +1,5 @@
 {
-  "id": "e813edb6-c4e5-4c02-ab16-22d3fddbc553",
+  "id": "add13223-9ee2-4103-b19b-036570e8552b",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -132,6 +132,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "team_name": {
           "name": "team_name",
           "type": "varchar(100)",
@@ -181,7 +187,22 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "heist_history_session_id_unique": {
+          "name": "heist_history_session_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "session_id"
+          ]
+        },
+        "unique_heist_session": {
+          "name": "unique_heist_session",
+          "nullsNotDistinct": false,
+          "columns": [
+            "session_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -213,6 +234,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "money_awarded": {
+          "name": "money_awarded",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'0'"
         },
         "created_at": {
           "name": "created_at",
@@ -427,13 +455,6 @@
           "type": "varchar(100)",
           "primaryKey": false,
           "notNull": false
-        },
-        "wallet_balance": {
-          "name": "wallet_balance",
-          "type": "numeric(12, 2)",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'0'"
         },
         "is_online": {
           "name": "is_online",

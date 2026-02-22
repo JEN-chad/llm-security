@@ -22,6 +22,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 @app.post("/evaluate", response_model=PolicyResponse)
 def evaluate(request: PolicyEvaluationRequest, db: DBClient = Depends(get_db)):
     return evaluate_policy(request, db)

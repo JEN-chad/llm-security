@@ -8,7 +8,7 @@ def get_session(db: DBClient, session_id: str):
     return resp.json()
 
 
-def create_session(db: DBClient, session_id: str, user_id: int):
+def create_session(db: DBClient, session_id: str, user_id: str):
     resp = db.post("/sessions", json={
         "sessionId": session_id,
         "userId": user_id,

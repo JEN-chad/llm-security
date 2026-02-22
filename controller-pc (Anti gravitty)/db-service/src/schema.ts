@@ -8,6 +8,7 @@ import {
     numeric,
     varchar,
     index,
+    unique,
 } from "drizzle-orm/pg-core";
 
 // ========================
@@ -21,10 +22,8 @@ export const users = pgTable(
         teamName: varchar("team_name", { length: 100 }),
         member1: varchar("member1", { length: 100 }),
         member2: varchar("member2", { length: 100 }),
-        walletBalance: numeric("wallet_balance", {
-            precision: 12,
-            scale: 2,
-        }).default("0"),
+        // wallet_balance column intentionally omitted — wallet table is the ONLY balance authority.
+        // Do NOT add it back. All balances must be read from wallet WHERE user_id = ? or WHERE is_main = true.
         isOnline: boolean("is_online").default(false),
         createdAt: timestamp("created_at").defaultNow(),
         failedAttempts: integer("failed_attempts").default(0).notNull(),
@@ -132,13 +131,21 @@ export const bankBalance = pgTable("bank_balance", {
 // ========================
 // HEIST HISTORY TABLE
 // ========================
-export const heistHistory = pgTable("heist_history", {
-    id: serial("id").primaryKey(),
-    uniqueId: varchar("unique_id", { length: 50 })
-        .references(() => users.uniqueId, { onDelete: "cascade" }),
-    teamName: varchar("team_name", { length: 100 }),
-    moneyTaken: numeric("money_taken", { precision: 12, scale: 2 }).notNull(),
-    bankBalanceAfter: numeric("bank_balance_after", { precision: 12, scale: 2 }).notNull(),
-    userMessage: text("user_message"),
-    createdAt: timestamp("created_at").defaultNow(),
-});
+export const heistHistory = pgTable(
+    "heist_history",
+    {
+        id: serial("id").primaryKey(),
+        uniqueId: varchar("unique_id", { length: 50 })
+            .references(() => users.uniqueId, { onDelete: "cascade" }),
+        // sessionId is the idempotency key — DB-level UNIQUE constraint prevents duplicate heist inserts
+        sessionId: text("session_id").unique(),
+        teamName: varchar("team_name", { length: 100 }),
+        moneyTaken: numeric("money_taken", { precision: 12, scale: 2 }).notNull(),
+        bankBalanceAfter: numeric("bank_balance_after", { precision: 12, scale: 2 }).notNull(),
+        userMessage: text("user_message"),
+        createdAt: timestamp("created_at").defaultNow(),
+    },
+    (table) => ({
+        uniqueHeistSession: unique("unique_heist_session").on(table.sessionId),
+    })
+);

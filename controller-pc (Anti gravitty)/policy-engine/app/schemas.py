@@ -14,7 +14,7 @@ class RiskFlags(BaseModel):
 
 class PolicyEvaluationRequest(BaseModel):
     session_id: str
-    user_id: int
+    user_id: str
     argument_quality: str
     emotional_manipulation: str
     rule_break_attempt: bool

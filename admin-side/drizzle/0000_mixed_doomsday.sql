@@ -19,11 +19,14 @@ CREATE TABLE "global_stats" (
 CREATE TABLE "heist_history" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"unique_id" varchar(50),
+	"session_id" text,
 	"team_name" varchar(100),
 	"money_taken" numeric(12, 2) NOT NULL,
 	"bank_balance_after" numeric(12, 2) NOT NULL,
 	"user_message" text,
-	"created_at" timestamp DEFAULT now()
+	"created_at" timestamp DEFAULT now(),
+	CONSTRAINT "heist_history_session_id_unique" UNIQUE("session_id"),
+	CONSTRAINT "unique_heist_session" UNIQUE("session_id")
 );
 --> statement-breakpoint
 CREATE TABLE "messages" (
@@ -31,6 +34,7 @@ CREATE TABLE "messages" (
 	"unique_id" varchar(50),
 	"user_message" text,
 	"llm_message" text,
+	"money_awarded" numeric(10, 2) DEFAULT '0',
 	"created_at" timestamp DEFAULT now()
 );
 --> statement-breakpoint
@@ -56,7 +60,6 @@ CREATE TABLE "users" (
 	"team_name" varchar(100),
 	"member1" varchar(100),
 	"member2" varchar(100),
-	"wallet_balance" numeric(12, 2) DEFAULT '0',
 	"is_online" boolean DEFAULT false,
 	"created_at" timestamp DEFAULT now(),
 	"failed_attempts" integer DEFAULT 0 NOT NULL,

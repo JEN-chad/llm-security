@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { users, bankBalance, heistHistory } from '@/lib/schema';
+import { users, wallet, bankBalance, heistHistory } from '@/lib/schema';
 import { eq, sum } from 'drizzle-orm';
 
 export const dynamic = 'force-dynamic';
@@ -14,14 +14,23 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: 'Missing unique_id' }, { status: 400 });
     }
 
-    // User check first
-    const userRows = await db.select({
-      walletBalance: users.walletBalance,
-    }).from(users).where(eq(users.uniqueId, unique_id));
-    
+    // Verify user exists
+    const userRows = await db
+      .select({ uniqueId: users.uniqueId })
+      .from(users)
+      .where(eq(users.uniqueId, unique_id));
+
     if (userRows.length === 0) {
       return NextResponse.json({ message: 'User not found' }, { status: 404 });
     }
+
+    // Read user wallet balance from wallet table (single source of truth)
+    const walletRows = await db
+      .select({ balance: wallet.balance })
+      .from(wallet)
+      .where(eq(wallet.userId, unique_id));
+
+    const user_wallet = walletRows.length > 0 ? walletRows[0].balance : "0";
 
     // Parallel queries for bank balance and per-user plundered total
     const [bankResult, plunderedResult] = await Promise.all([
@@ -32,15 +41,12 @@ export async function GET(req: Request) {
     ]);
 
     const bank_balance = bankResult[0]?.total_balance || 0;
-    // Per-user plundered: sum of all heists by this user (starts at 0 for new users)
     const total_plundered = plunderedResult[0]?.total_plundered || 0;
-    // User's individual wallet balance
-    const user_wallet = userRows[0]?.walletBalance || 0;
 
-    return NextResponse.json({ 
-        wallet_balance: Number(bank_balance),       // global bank (shared)
-        user_wallet: Number(user_wallet),           // individual wallet
-        total_plundered: Number(total_plundered),   // per-user plundered (starts at 0)
+    return NextResponse.json({
+      wallet_balance: Number(bank_balance),       // global bank (shared)
+      user_wallet: Number(user_wallet),           // individual wallet from wallet table
+      total_plundered: Number(total_plundered),   // per-user plundered
     });
 
   } catch (error) {
@@ -48,4 +54,3 @@ export async function GET(req: Request) {
     return NextResponse.json({ message: 'Server error' }, { status: 500 });
   }
 }
-

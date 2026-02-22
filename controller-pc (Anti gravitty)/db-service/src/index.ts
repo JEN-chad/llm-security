@@ -9,25 +9,12 @@ app.use(express.json());
 const PORT = process.env.PORT || 8002;
 
 // ========================
-// HELPER: Resolve any userId (numeric or string) to actual uniqueId
+// HELPER: Resolve userId string to actual uniqueId
 // ========================
 async function resolveUserId(idParam: string): Promise<string | null> {
-    // 1. Try direct uniqueId match
+    // Direct uniqueId match (IDs are now always SYSCONZ-format strings)
     const direct = await db.select().from(users).where(eq(users.uniqueId, idParam));
     if (direct.length > 0) return direct[0].uniqueId;
-
-    // 2. Try "user_<id>" pattern (policy engine creates users this way)
-    const prefixed = `user_${idParam}`;
-    const byPrefix = await db.select().from(users).where(eq(users.uniqueId, prefixed));
-    if (byPrefix.length > 0) return byPrefix[0].uniqueId;
-
-    // 3. Try numeric index fallback
-    const numId = parseInt(idParam);
-    if (!isNaN(numId)) {
-        const allUsers = await db.select().from(users);
-        const found = allUsers.find((_u, i) => i + 1 === numId);
-        if (found) return found.uniqueId;
-    }
 
     return null;
 }
@@ -192,8 +179,8 @@ app.get("/users/:id", async (req, res) => {
 app.post("/users", async (req, res) => {
     try {
         const { id, username, wins, failedAttempts } = req.body;
-        // Create user with uniqueId — use username if provided, else generate from id
-        const uid = username || `user_${id}`;
+        // Use username (string uniqueId) directly; id is ignored if username is provided
+        const uid = username || String(id);
         const values: any = { uniqueId: uid };
         if (wins !== undefined) values.wins = wins;
         if (failedAttempts !== undefined) values.failedAttempts = failedAttempts;
@@ -374,72 +361,276 @@ app.post("/wallet/init-main", async (_req, res) => {
 app.post("/wallet/transfer", async (req, res) => {
     try {
         const { userId, amount } = req.body;
-        const amountStr = String(amount);
+        const amountNum = parseFloat(String(amount));
+        if (isNaN(amountNum) || amountNum <= 0) {
+            return res.json({ success: false, reason: "Invalid amount" });
+        }
 
         // Resolve the incoming userId to an actual uniqueId in users table
-        // Policy engine sends numeric IDs, but users table has varchar PKs
         const resolvedUid = await resolveUserId(String(userId));
         if (!resolvedUid) {
             return res.json({ success: false, reason: "User not found for wallet transfer" });
         }
 
-        // 1. Deduct from main wallet (only if sufficient balance)
-        const mainWalletResult = await db
+        // ── Step 1: Read current main wallet ─────────────────────────────
+        const mainWalletRows = await db
             .select()
             .from(wallet)
             .where(eq(wallet.isMain, true));
 
-        if (mainWalletResult.length === 0) {
+        if (mainWalletRows.length === 0) {
             return res.json({ success: false, reason: "Main wallet not found" });
         }
+        const mainWalletId = mainWalletRows[0].id;
+        const mainBalance = parseFloat(mainWalletRows[0].balance);
 
-        const mainBalance = parseFloat(mainWalletResult[0].balance);
-        if (mainBalance < parseFloat(amountStr)) {
+        if (mainBalance < amountNum) {
             return res.json({ success: false, reason: "Insufficient balance" });
         }
 
-        // Deduct from main
-        await db
+        // ── Step 2: Atomically deduct from main wallet (by primary key) ───
+        // Use numeric arithmetic in SQL; guard with numeric comparison too.
+        // We use the row's primary key so the UPDATE is unambiguous (one row only).
+        const deductResult = await db
             .update(wallet)
             .set({
-                balance: sql`${wallet.balance}::numeric - ${amountStr}::numeric`,
+                balance: sql`balance - ${amountNum}`,
             })
-            .where(and(eq(wallet.isMain, true), gte(wallet.balance, amountStr)));
+            .where(
+                and(
+                    eq(wallet.id, mainWalletId),
+                    sql`balance >= ${amountNum}`
+                )
+            )
+            .returning();
 
-        // 2. Also update bank_balance to stay in sync with main wallet
-        try {
-            await db
-                .update(bankBalance)
-                .set({
-                    totalBalance: sql`${bankBalance.totalBalance}::numeric - ${amountStr}::numeric`,
-                });
-        } catch (e) {
-            console.error("Bank balance sync error:", e);
+        // Guard: if 0 rows updated then vault balance was actually insufficient
+        if (deductResult.length === 0) {
+            return res.json({ success: false, reason: "Deduction failed — vault balance too low" });
         }
 
-        // 3. Credit user wallet (using resolved uniqueId)
-        const userWalletResult = await db
+        // The new vault balance after deduction
+        const newVaultBalance = deductResult[0].balance; // e.g. "29800.00"
+
+        // ── Step 3: Keep bank_balance in sync with main wallet ────────────
+        // This MUST stay in sync with the wallet (isMain=true) row.
+        // Do NOT wrap in a silent try/catch — let errors surface so the
+        // caller knows the transfer failed rather than silently diverging.
+        const bankRows = await db.select().from(bankBalance);
+        if (bankRows.length > 0) {
+            await db
+                .update(bankBalance)
+                .set({ totalBalance: newVaultBalance })
+                .where(eq(bankBalance.id, bankRows[0].id));
+        } else {
+            // No bank_balance row yet — create one mirroring the vault
+            await db.insert(bankBalance).values({ totalBalance: newVaultBalance });
+        }
+        console.log(`[transfer] bank_balance synced to ${newVaultBalance}`);
+
+        // ── Step 4: Credit the user's wallet ─────────────────────────────
+        const userWalletRows = await db
             .select()
             .from(wallet)
             .where(eq(wallet.userId, resolvedUid));
 
-        if (userWalletResult.length === 0) {
+        if (userWalletRows.length === 0) {
             await db
                 .insert(wallet)
-                .values({ userId: resolvedUid, balance: amountStr, isMain: false });
+                .values({ userId: resolvedUid, balance: String(amountNum), isMain: false });
         } else {
             await db
                 .update(wallet)
                 .set({
-                    balance: sql`${wallet.balance}::numeric + ${amountStr}::numeric`,
+                    balance: sql`balance + ${amountNum}`,
                 })
-                .where(eq(wallet.userId, resolvedUid));
+                .where(eq(wallet.id, userWalletRows[0].id));
         }
 
-        res.json({ success: true });
+        console.log(`[transfer] vault: ${mainBalance} → ${newVaultBalance} | user ${resolvedUid} +${amountNum}`);
+        res.json({ success: true, newVaultBalance });
     } catch (error: any) {
         console.error("Transfer error:", error);
         res.json({ success: false, reason: error.message });
+    }
+});
+
+// ========================
+// HEIST TRANSFER — FULLY ATOMIC
+// All steps run inside ONE PostgreSQL transaction with FOR UPDATE locking.
+// Steps:
+//   BEGIN
+//   A. SELECT ... FOR UPDATE (lock main wallet row)
+//   B. Verify sufficient funds
+//   C. UPDATE wallet (deduct from main)
+//   D. UPDATE wallet (credit user)
+//   E. SELECT balance FROM wallet WHERE is_main = true  (re-fetch — no manual calc)
+//   F. INSERT heist_history (bank_balance_after = freshly fetched balance)
+//   G. UPDATE bank_balance (sync to main wallet)
+//   COMMIT  (or ROLLBACK on any error)
+// ========================
+app.post("/wallet/heist-transfer", async (req, res) => {
+    try {
+        const { userId, amount, sessionId, userMessage } = req.body;
+        const amountNum = parseFloat(String(amount));
+        if (isNaN(amountNum) || amountNum <= 0) {
+            return res.json({ success: false, reason: "Invalid amount" });
+        }
+
+        // Resolve the incoming userId to an actual uniqueId in users table
+        const resolvedUid = await resolveUserId(String(userId));
+        if (!resolvedUid) {
+            return res.json({ success: false, reason: "User not found for heist transfer" });
+        }
+
+        // Fetch team name for heist_history record (outside tx is fine — read-only metadata)
+        const userRows = await db.select().from(users).where(eq(users.uniqueId, resolvedUid));
+        const teamName = userRows[0]?.teamName ?? null;
+
+        // ── SINGLE ATOMIC TRANSACTION ─────────────────────────────────────────
+        const result = await db.transaction(async (tx) => {
+
+            // A. Lock the main wallet row with FOR UPDATE (prevents concurrent reads)
+            const lockedRows = await tx.execute(
+                sql`SELECT id, balance FROM wallet WHERE is_main = true FOR UPDATE`
+            );
+
+            if (!lockedRows.rows || lockedRows.rows.length === 0) {
+                throw new Error("Main wallet not found");
+            }
+
+            const mainWalletId = lockedRows.rows[0].id as number;
+            const mainBalance = parseFloat(String(lockedRows.rows[0].balance));
+
+            // B. Verify sufficient funds
+            if (mainBalance < amountNum) {
+                throw new Error(`Insufficient vault funds: have ${mainBalance}, need ${amountNum}`);
+            }
+
+            // C. Deduct from main wallet
+            await tx
+                .update(wallet)
+                .set({ balance: sql`balance - ${amountNum}` })
+                .where(eq(wallet.id, mainWalletId));
+
+            // D. Credit the user's wallet
+            const userWalletRows = await tx
+                .select()
+                .from(wallet)
+                .where(eq(wallet.userId, resolvedUid));
+
+            if (userWalletRows.length === 0) {
+                await tx.insert(wallet).values({
+                    userId: resolvedUid,
+                    balance: String(amountNum),
+                    isMain: false,
+                });
+            } else {
+                await tx
+                    .update(wallet)
+                    .set({ balance: sql`balance + ${amountNum}` })
+                    .where(eq(wallet.id, userWalletRows[0].id));
+            }
+
+            // E. Re-fetch updated main wallet balance (DO NOT compute manually)
+            const updatedMainRows = await tx
+                .select({ balance: wallet.balance })
+                .from(wallet)
+                .where(eq(wallet.isMain, true));
+
+            const updatedMainBalance = updatedMainRows[0].balance; // e.g. "29800.00"
+
+            // F. Insert heist_history with the freshly fetched balance
+            // sessionId is the idempotency key — the DB UNIQUE constraint on session_id
+            // will reject this INSERT if the same session has already committed a heist.
+            const heistRows = await tx
+                .insert(heistHistory)
+                .values({
+                    uniqueId: resolvedUid,
+                    sessionId: sessionId ?? null,
+                    teamName: teamName,
+                    moneyTaken: String(amountNum),
+                    bankBalanceAfter: updatedMainBalance,
+                    userMessage: userMessage ?? null,
+                    createdAt: new Date(),
+                })
+                .returning();
+
+            // G. Update bank_balance table to mirror the main wallet exactly
+            const bankRows = await tx.select().from(bankBalance);
+            if (bankRows.length > 0) {
+                await tx
+                    .update(bankBalance)
+                    .set({ totalBalance: updatedMainBalance })
+                    .where(eq(bankBalance.id, bankRows[0].id));
+            } else {
+                await tx.insert(bankBalance).values({ totalBalance: updatedMainBalance });
+            }
+
+            console.log(
+                `[heist-transfer] COMMITTED: user=${resolvedUid} amount=${amountNum} newVault=${updatedMainBalance}`
+            );
+
+            return {
+                newVaultBalance: updatedMainBalance,
+                heistRecord: heistRows[0],
+            };
+        });
+        // ── END TRANSACTION ───────────────────────────────────────────────────
+
+        res.json({ success: true, ...result });
+    } catch (error: any) {
+        console.error("[heist-transfer] ROLLBACK:", error.message);
+        res.json({ success: false, reason: error.message });
+    }
+});
+
+// ========================
+// BANK BALANCE
+// Always mirrors wallet WHERE isMain = true.
+// ========================
+
+// Helper: sync bank_balance to the current isMain wallet balance
+async function syncBankBalance(): Promise<string | null> {
+    const mainRows = await db.select().from(wallet).where(eq(wallet.isMain, true));
+    if (mainRows.length === 0) return null;
+    const vaultBalance = mainRows[0].balance;
+    const bankRows = await db.select().from(bankBalance);
+    if (bankRows.length > 0) {
+        await db
+            .update(bankBalance)
+            .set({ totalBalance: vaultBalance })
+            .where(eq(bankBalance.id, bankRows[0].id));
+    } else {
+        await db.insert(bankBalance).values({ totalBalance: vaultBalance });
+    }
+    return vaultBalance;
+}
+
+app.get("/bank-balance", async (_req, res) => {
+    try {
+        // Always read & sync from the isMain wallet (source of truth)
+        const vaultBalance = await syncBankBalance();
+        if (vaultBalance === null) {
+            return res.status(404).json({ error: "Main wallet not found" });
+        }
+        res.json({ totalBalance: vaultBalance, source: "wallet_isMain" });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Force-sync bank_balance from the isMain wallet (useful after manual DB edits)
+app.post("/bank-balance/sync", async (_req, res) => {
+    try {
+        const vaultBalance = await syncBankBalance();
+        if (vaultBalance === null) {
+            return res.status(404).json({ error: "Main wallet not found" });
+        }
+        console.log(`[bank-balance/sync] Forced sync → ${vaultBalance}`);
+        res.json({ success: true, totalBalance: vaultBalance, source: "wallet_isMain" });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -555,10 +746,29 @@ app.patch("/sessions/:id", async (req, res) => {
 });
 
 // ========================
+// STARTUP: Auto-sync bankBalance ↔ wallet isMain=true
+// Runs once on every boot — no manual call required.
+// Uses the shared syncBankBalance() helper.
+// ========================
+async function syncBankBalanceOnBoot() {
+    try {
+        const vaultBalance = await syncBankBalance();
+        if (vaultBalance === null) {
+            console.warn("⚠️  No isMain wallet found during boot sync — skipping bankBalance sync");
+            return;
+        }
+        console.log(`🏦 Boot sync: bank_balance set to ${vaultBalance} (matches isMain wallet)`);
+    } catch (e) {
+        console.error("❌ Boot sync (bank_balance) failed:", e);
+    }
+}
+
+// ========================
 // START SERVER
 // ========================
 async function start() {
     await waitForDb();
+    await syncBankBalanceOnBoot();
     app.listen(PORT, () => {
         console.log(`🚀 DB Service running on port ${PORT}`);
     });

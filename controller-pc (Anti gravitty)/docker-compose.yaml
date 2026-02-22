@@ -12,23 +12,38 @@ services:
       PORT: "8002"
     ports:
       - "8002:8002"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8002/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
 
   policy-engine:
     build: ./policy-engine
     container_name: policy-engine
     restart: always
     depends_on:
-      - db-service
+      db-service:
+        condition: service_healthy
     environment:
       DB_SERVICE_URL: http://db-service:8002
     ports:
       - "8001:8001"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   api-gateway:
     build: ./api-gateway
     container_name: api-gateway
+    restart: always
     depends_on:
-      - policy-engine
+      policy-engine:
+        condition: service_healthy
     env_file:
       - .env
     environment:

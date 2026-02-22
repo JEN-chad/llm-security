@@ -21,7 +21,6 @@ async function seed() {
             teamName: null,
             member1: null,
             member2: null,
-            walletBalance: "0",
             isOnline: false,
             failedAttempts: 0,
             wins: 0,

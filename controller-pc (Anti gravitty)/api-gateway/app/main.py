@@ -17,6 +17,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 INJECTION_PATTERNS = [
     r"ignore previous",
     r"override system",
