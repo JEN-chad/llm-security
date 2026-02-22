@@ -1,0 +1,214 @@
+To connect with db from terminal:
+docker exec -it persuade-db psql -U postgres -d persuade
+
+Exit command for db: \q
+
+To stop all containers:
+docker-compose down
+
+To start all containers:
+docker-compose up -d
+
+To stop and remove all containers:
+docker-compose down -v
+
+To view logs:
+docker-compose logs -f
+
+python -m http.server 5500
+
+# DB commands
+
+
+# ✅ Step 1 — Connect to PostgreSQL (From VS Code Terminal)
+
+Since you're using Docker:
+
+docker exec -it persuade-db psql -U postgres -d persuade
+
+
+You should now see:
+
+persuade=#
+
+# ✅ Step 2 — Check Main Wallet Balance
+
+Your main wallet is is_main = true.
+
+SELECT id, balance, is_main
+FROM wallet
+WHERE is_main = true;
+
+
+This shows your vault balance.
+
+# ✅ Step 3 — Check All User Wallets
+SELECT id, user_id, balance
+FROM wallet
+WHERE is_main = false
+ORDER BY user_id;
+
+# ✅ Step 4 — Check Specific User Wallet
+
+Example for user_id = 3:
+
+SELECT id, user_id, balance
+FROM wallet
+WHERE user_id = 3;
+
+# ✅ Step 5 — Clean View (Join Users + Wallet)
+
+This is the best one for debugging:
+
+SELECT u.id AS user_id,
+       u.username,
+       w.balance
+FROM users u
+JOIN wallet w ON u.id = w.user_id
+WHERE w.is_main = false
+ORDER BY u.id;
+
+# ✅ Step 6 — See Total Vault Remaining
+SELECT balance AS main_vault_balance
+FROM wallet
+WHERE is_main = true;
+
+# ✅ Step 7 — See Recent Transactions
+SELECT user_id,
+       amount,
+       decision,
+       created_at
+FROM transactions
+ORDER BY created_at DESC
+LIMIT 10;
+
+# ✅ Step 8 — See Total Money Distributed
+SELECT SUM(amount) AS total_distributed
+FROM transactions
+WHERE decision = 'APPROVED';
+
+# ✅ Step 9 — Check Users Stats
+SELECT id, username, wins, failed_attempts
+FROM users
+ORDER BY id;
+
+# 🔥 Bonus Debug Command (Very Useful)
+
+See vault + distributed side by side:
+
+SELECT
+    (SELECT balance FROM wallet WHERE is_main = true) AS main_balance,
+    (SELECT SUM(amount) FROM transactions WHERE decision='APPROVED') AS total_paid;
+
+# ✅ Exit psql
+\q
+
+
+# Reset Commands
+
+Step 1 — Enter PostgreSQL
+docker exec -it persuade-db psql -U postgres -d persuade
+
+Step 2 — Reset All Data (Clean Reset)
+
+Run this:
+
+TRUNCATE TABLE transactions RESTART IDENTITY CASCADE;
+TRUNCATE TABLE sessions RESTART IDENTITY CASCADE;
+TRUNCATE TABLE wallet RESTART IDENTITY CASCADE;
+TRUNCATE TABLE users RESTART IDENTITY CASCADE;
+TRUNCATE TABLE global_stats RESTART IDENTITY CASCADE;
+
+
+This will:
+
+Delete all rows
+
+Reset auto-increment IDs
+
+Keep table structure
+
+Step 3 — Recreate Main Wallet
+
+After truncating, you must recreate your main vault:
+
+INSERT INTO wallet (balance, is_main)
+VALUES (30000, true);
+
+Step 4 — Recreate Global Stats
+INSERT INTO global_stats (total_wins, security_level)
+VALUES (0, 1);
+
+Step 5 — Verify Reset
+
+Check:
+
+SELECT * FROM wallet;
+SELECT * FROM users;
+SELECT * FROM transactions;
+SELECT * FROM global_stats;
+
+
+You should see:
+
+Only 1 wallet (main)
+
+Empty users
+
+Empty transactions
+
+Global stats reset
+
+
+# Reinsert users
+
+✅ Step 1 — Enter PostgreSQL
+docker exec -it persuade-db psql -U postgres -d persuade
+
+✅ Step 2 — Insert 30 Users
+
+This will generate users user_1 to user_30.
+
+INSERT INTO users (username, failed_attempts, wins, last_attempt_time)
+SELECT 
+    'user_' || generate_series(1,30),
+    0,
+    0,
+    NOW();
+
+✅ Step 3 — Create Wallet For Each User
+
+Each user gets balance = 0.
+
+INSERT INTO wallet (user_id, balance, is_main)
+SELECT id, 0, false
+FROM users;
+
+✅ Step 4 — Verify Users
+SELECT id, username FROM users ORDER BY id;
+
+
+You should see 30 rows.
+
+✅ Step 5 — Verify Wallets
+SELECT user_id, balance
+FROM wallet
+WHERE is_main = false
+ORDER BY user_id;
+
+
+You should see 30 user wallets.
+
+✅ Step 6 — Confirm Main Wallet Still Exists
+SELECT id, balance
+FROM wallet
+WHERE is_main = true;
+
+
+You should still have your vault with 30000.
+
+🔥 Bonus: Check Everything Together
+SELECT u.id, u.username, w.balance
+FROM users u
+JOIN wallet w ON u.id = w.user_id
+ORDER BY u.id;
