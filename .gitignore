@@ -1,0 +1,94 @@
+# ==============================
+# Dependencies
+# ==============================
+node_modules/
+.pnp
+.pnp.js
+
+# ==============================
+# Environment Variables
+# ==============================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ==============================
+# Python
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.Python
+env/
+venv/
+.venv/
+
+# ==============================
+# Next.js
+# ==============================
+.next/
+out/
+
+# ==============================
+# Expo / React Native
+# ==============================
+.expo/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+
+# ==============================
+# Build & Output
+# ==============================
+build/
+dist/
+*.tsbuildinfo
+
+# ==============================
+# Database / Docker
+# ==============================
+pgdata/
+
+# ==============================
+# IDE & System Files
+# ==============================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==============================
+# Logs & Debug
+# ==============================
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+error.log
+error_theme.log
+build_log.txt
+
+# ==============================
+# Misc Output Files
+# ==============================
+*_output.txt
+
+# ==============================
+# Package Lock (optional — remove if you want to track it)
+# ==============================
+# package-lock.json
